@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Writing World — S3 + CloudFront + ACM + Route 53
+  Hosted at writingworld.malha.land
+
+# ── Notes ────────────────────────────────────────────────────────────────────
+# • This stack MUST be deployed to us-east-1 because ACM certificates used
+#   by CloudFront must live in that region.
+# • CloudFront itself is a global service — your content is served from edge
+#   locations worldwide regardless of the stack region.
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+  HostedZoneId:
+    Type: String
+    Default: Z0361576365F5A0HG4AS4
+    Description: Route 53 Hosted Zone ID for malha.land
+
+  DomainName:
+    Type: String
+    Default: writingworld.malha.land
+    Description: Full domain name for the site
+
+Resources:
+
+  # ── SSL Certificate ─────────────────────────────────────────────────────────
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Project
+          Value: WritingWorld
+
+  # ── S3 Bucket ───────────────────────────────────────────────────────────────
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub writingworld-malha-land-${AWS::AccountId}
+      # No public access — CloudFront talks to it via OAC
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: WritingWorld
+
+  # ── Bucket Policy: allow CloudFront OAC to GetObject ───────────────────────
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${SiteBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub >-
+                  arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+  # ── Origin Access Control (modern OAC, replaces legacy OAI) ────────────────
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: WritingWorldOAC
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ── CloudFront Distribution ─────────────────────────────────────────────────
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Writing World — writingworld.malha.land
+        Aliases:
+          - !Ref DomainName
+        DefaultRootObject: index.html
+
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''   # empty = use OAC instead of OAI
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized (AWS managed)
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods:  [GET, HEAD]
+          Compress: true
+
+        # SPA fallback: serve index.html for 403/404 (S3 returns 403 for missing keys)
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100  # US, Canada, Europe edge locations
+
+      Tags:
+        - Key: Project
+          Value: WritingWorld
+
+  # ── Route 53 A + AAAA alias records → CloudFront ───────────────────────────
+  DnsRecordIPv4:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2   # CloudFront's fixed hosted zone ID
+        EvaluateTargetHealth: false
+
+  DnsRecordIPv6:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+Outputs:
+  BucketName:
+    Description: S3 bucket to deploy files into
+    Value: !Ref SiteBucket
+    Export:
+      Name: WritingWorldBucket
+
+  DistributionId:
+    Description: CloudFront distribution ID (needed for cache invalidations)
+    Value: !Ref Distribution
+    Export:
+      Name: WritingWorldDistributionId
+
+  DistributionDomain:
+    Description: CloudFront domain (use before DNS propagates)
+    Value: !GetAtt Distribution.DomainName
+
+  SiteUrl:
+    Description: Live URL
+    Value: !Sub https://${DomainName}

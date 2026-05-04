@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Writing World — Cost budget alert + CloudFront monitoring
+  Deploys to us-east-1 (required for CloudFront metrics & budgets)
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive budget and alarm alerts
+
+  MonthlyBudgetUSD:
+    Type: Number
+    Default: 10
+    Description: Monthly spend limit in USD — alert fires at 80% and 100%
+
+  DistributionId:
+    Type: String
+    Description: CloudFront Distribution ID (from writing-world stack output)
+
+Resources:
+
+  # ── SNS topic for all alerts ──────────────────────────────────────────────
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: WritingWorldAlerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  # ── AWS Budget: hard monthly cap ─────────────────────────────────────────
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: WritingWorldMonthlyBudget
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUSD
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+  # ── CloudWatch Alarms ─────────────────────────────────────────────────────
+  # CloudFront metrics are only available in us-east-1.
+
+  HighRequestRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-HighRequestRate
+      AlarmDescription: >
+        CloudFront requests exceed 10,000 in a 5-minute window.
+        Could indicate a viral spike or a scraper/DDoS.
+      Namespace: AWS/CloudFront
+      MetricName: Requests
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref DistributionId
+        - Name: Region
+          Value: Global
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-HighErrorRate
+      AlarmDescription: >
+        CloudFront 5xx error rate exceeds 5%.
+        Likely a misconfiguration or broken asset.
+      Namespace: AWS/CloudFront
+      MetricName: 5xxErrorRate
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref DistributionId
+        - Name: Region
+          Value: Global
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  HighBytesDownloadAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-HighDataTransfer
+      AlarmDescription: >
+        CloudFront bytes downloaded exceeds 5 GB in one hour.
+        Could indicate large-file hotlinking or scraping.
+      Namespace: AWS/CloudFront
+      MetricName: BytesDownloaded
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref DistributionId
+        - Name: Region
+          Value: Global
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 5368709120  # 5 GB in bytes
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+Outputs:
+  AlertTopicArn:
+    Value: !Ref AlertTopic
+    Description: SNS topic ARN — subscribe additional endpoints here if needed
+
+  BudgetName:
+    Value: WritingWorldMonthlyBudget
+    Description: View in AWS Budgets console
