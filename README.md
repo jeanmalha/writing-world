@@ -4,7 +4,7 @@ A world-building knowledge base for fiction writers.
 Manage characters, locations, factions, species, events, artifacts and lore — with linked relations and a timeline.
 Runs entirely in the browser — no build step, no backend.
 
-Live at **[writingworld.malha.land](https://writingworld.malha.land)**
+Live at **[lore.malha.land](https://lore.malha.land)**
 
 ---
 

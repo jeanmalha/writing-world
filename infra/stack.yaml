@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Writing World — S3 + CloudFront + ACM + Route 53
-  Hosted at writingworld.malha.land
+  Hosted at lore.malha.land
 
 # ── Notes ────────────────────────────────────────────────────────────────────
 # • This stack MUST be deployed to us-east-1 because ACM certificates used
@@ -18,7 +18,7 @@ Parameters:
 
   DomainName:
     Type: String
-    Default: writingworld.malha.land
+    Default: lore.malha.land
     Description: Full domain name for the site
 
 Resources:
@@ -40,7 +40,7 @@ Resources:
   SiteBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub writingworld-malha-land-${AWS::AccountId}
+      BucketName: !Sub lore-malha-land-${AWS::AccountId}
       # No public access — CloudFront talks to it via OAC
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -86,7 +86,7 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: Writing World — writingworld.malha.land
+        Comment: Writing World — lore.malha.land
         Aliases:
           - !Ref DomainName
         DefaultRootObject: index.html
