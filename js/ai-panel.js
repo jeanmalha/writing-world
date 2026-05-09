@@ -1,15 +1,34 @@
 import { store, TYPES } from './store.js';
 import { isAuthenticated, login } from './auth.js';
-import { startExtraction, startAnalysis, pollJob } from './api.js';
+import { startExtraction, startAnalysis, startPdfExtraction, pollJob } from './api.js';
 
 // Module state — persists while AI view is active
 let _mode    = 'extract';   // 'extract' | 'analyze'
+let _source  = 'text';      // 'text' | 'pdf'
 let _model   = 'simple';    // 'simple'  | 'complex'
 let _text    = '';
 let _results = null;
 let _status  = '';
 let _loading = false;
 let _polling = false;
+
+// PDF state
+let _pdfPages      = [];
+let _pdfFileName   = '';
+let _pdfExtracting = false;
+let _pdfProgress   = 0;
+let _pdfTotal      = 0;
+
+const PDFJS_CDN = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.9.155/build/pdf.min.mjs';
+const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.9.155/build/pdf.worker.min.mjs';
+
+async function getPdfjsLib() {
+  if (window._pdfjsLib) return window._pdfjsLib;
+  const lib = await import(PDFJS_CDN);
+  lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  window._pdfjsLib = lib;
+  return lib;
+}
 
 const MODEL_LABEL = {
   simple:  { name: 'Simple',  hint: 'Fast · GPT OSS 20B' },
@@ -77,8 +96,37 @@ function renderAiList(listHeader, entityList, detailContent) {
   ta?.addEventListener('input', () => { _text = ta.value; });
 
   btn?.addEventListener('click', () => {
-    if (_mode === 'extract') runExtract(listHeader, entityList, detailContent);
-    else                     runAnalyze(listHeader, entityList, detailContent);
+    if (_mode === 'analyze')       runAnalyze(listHeader, entityList, detailContent);
+    else if (_source === 'pdf')    runPdfExtract(listHeader, entityList, detailContent);
+    else                           runExtract(listHeader, entityList, detailContent);
+  });
+
+  // Source toggle
+  document.getElementById('btn-src-text')?.addEventListener('click', () => {
+    if (_source !== 'text') { _source = 'text'; rerender(listHeader, entityList, detailContent); }
+  });
+  document.getElementById('btn-src-pdf')?.addEventListener('click', () => {
+    if (_source !== 'pdf') { _source = 'pdf'; rerender(listHeader, entityList, detailContent); }
+  });
+
+  // PDF file input
+  document.getElementById('ai-pdf-input')?.addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    await handlePdfFile(file, listHeader, entityList, detailContent);
+  });
+
+  // PDF drop zone
+  const drop = document.getElementById('ai-pdf-drop');
+  drop?.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('drag-over'); });
+  drop?.addEventListener('dragleave', () => drop.classList.remove('drag-over'));
+  drop?.addEventListener('drop', async e => {
+    e.preventDefault();
+    drop.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file?.type === 'application/pdf') {
+      await handlePdfFile(file, listHeader, entityList, detailContent);
+    }
   });
 }
 
@@ -93,14 +141,48 @@ function modelToggleHtml() {
 }
 
 function renderExtractInput() {
+  const srcText = _source === 'text';
   return `<div class="ai-input-area">
+    <div class="ai-source-toggle">
+      <button class="ai-src-btn${srcText ? ' active' : ''}" id="btn-src-text">Text</button>
+      <button class="ai-src-btn${!srcText ? ' active' : ''}" id="btn-src-pdf">PDF</button>
+    </div>
     ${modelToggleHtml()}
-    <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The model will extract and match against your existing entities.">${esc(_text)}</textarea>
-    <button id="btn-ai-run" ${_loading ? 'disabled' : ''}>
-      ${_loading ? '◈ Extracting…' : '▶ Extract'}
+    ${srcText ? `
+      <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The model will extract and match against your existing entities.">${esc(_text)}</textarea>
+    ` : renderPdfInput()}
+    <button id="btn-ai-run" ${_loading || (_source === 'pdf' && !_pdfPages.length && !_pdfExtracting) ? 'disabled' : ''}>
+      ${_loading ? (_source === 'pdf' ? '◈ Extracting PDF…' : '◈ Extracting…') : (_source === 'pdf' ? '▶ Extract PDF' : '▶ Extract')}
     </button>
     ${_status ? `<div class="ai-status-msg">${esc(_status)}</div>` : ''}
   </div>`;
+}
+
+function renderPdfInput() {
+  if (_pdfExtracting) {
+    return `<div class="ai-pdf-progress">
+      <div class="ai-pdf-prog-bar">
+        <div class="ai-pdf-prog-fill" style="width:${_pdfTotal ? Math.round(_pdfProgress/_pdfTotal*100) : 0}%"></div>
+      </div>
+      <div class="ai-pdf-prog-label">Reading page ${_pdfProgress} of ${_pdfTotal}…</div>
+    </div>`;
+  }
+
+  if (_pdfPages.length) {
+    const chunks = Math.ceil(_pdfPages.length / 5);
+    return `<div class="ai-pdf-ready">
+      <div class="ai-pdf-file">◈ ${esc(_pdfFileName)}</div>
+      <div class="ai-pdf-meta">${_pdfPages.length} pages · ${chunks} chunk${chunks !== 1 ? 's' : ''} of 5</div>
+      <button class="ai-pdf-clear" id="ai-pdf-clear-btn">✕ Clear</button>
+    </div>`;
+  }
+
+  return `<label class="ai-pdf-drop" id="ai-pdf-drop">
+    <input type="file" id="ai-pdf-input" accept=".pdf" style="display:none">
+    <span class="ai-pdf-icon">⬆</span>
+    <span class="ai-pdf-label">Drop PDF or click to browse</span>
+    <span class="ai-pdf-hint">Text will be extracted page by page</span>
+  </label>`;
 }
 
 function renderAnalyzeInput() {
@@ -115,6 +197,44 @@ function renderAnalyzeInput() {
     </button>
     ${_status ? `<div class="ai-status-msg">${esc(_status)}</div>` : ''}
   </div>`;
+}
+
+// ── PDF extraction ────────────────────────────────────
+async function handlePdfFile(file, listHeader, entityList, detailContent) {
+  _pdfFileName   = file.name;
+  _pdfPages      = [];
+  _pdfExtracting = true;
+  _pdfProgress   = 0;
+  _pdfTotal      = 0;
+  rerender(listHeader, entityList, detailContent);
+
+  try {
+    const pdfjsLib   = await getPdfjsLib();
+    const buffer     = await file.arrayBuffer();
+    const pdf        = await pdfjsLib.getDocument({ data: buffer }).promise;
+    _pdfTotal        = pdf.numPages;
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      _pdfProgress = i;
+      const page    = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      _pdfPages.push(content.items.map(item => item.str).join(' ').trim());
+      // Update progress every 5 pages
+      if (i % 5 === 0) rerender(listHeader, entityList, detailContent);
+    }
+  } catch (err) {
+    _status = `PDF read failed: ${err.message}`;
+    _pdfPages = [];
+  }
+
+  _pdfExtracting = false;
+  rerender(listHeader, entityList, detailContent);
+
+  // Wire up clear button after re-render
+  document.getElementById('ai-pdf-clear-btn')?.addEventListener('click', () => {
+    _pdfPages = []; _pdfFileName = ''; _status = '';
+    rerender(listHeader, entityList, detailContent);
+  });
 }
 
 // ── Run + poll ────────────────────────────────────────
@@ -135,6 +255,19 @@ async function runExtract(listHeader, entityList, detailContent) {
 
   await runJob(() => startExtraction(_text, existingEntities, _model), 'extract',
                listHeader, entityList, detailContent);
+}
+
+async function runPdfExtract(listHeader, entityList, detailContent) {
+  if (!_pdfPages.length || _loading) return;
+
+  const existingEntities = store.getAll().map(e => ({
+    id: e.id, type: e.type, name: e.name, description: e.description || '',
+    ...(e.role    ? { role:    e.role    } : {}),
+    ...(e.locType ? { locType: e.locType } : {}),
+  }));
+
+  await runJob(() => startPdfExtraction(_pdfPages, existingEntities, _model),
+               'extract-pdf', listHeader, entityList, detailContent);
 }
 
 async function runAnalyze(listHeader, entityList, detailContent) {
@@ -171,7 +304,8 @@ async function runJob(startFn, endpoint, listHeader, entityList, detailContent) 
       if (job.status === 'done')  { _results = job.result; _status = ''; break; }
       if (job.status === 'error') { _status = job.error || 'Failed'; break; }
       dots = (dots + 1) % 4;
-      _status = (endpoint === 'extract' ? 'Extracting' : 'Analyzing') + '.'.repeat(dots + 1);
+      const verb = endpoint === 'analyze' ? 'Analyzing' : 'Extracting';
+      _status = verb + '.'.repeat(dots + 1);
       rerender(listHeader, entityList, detailContent);
     }
   } catch (err) {
@@ -186,6 +320,11 @@ async function runJob(startFn, endpoint, listHeader, entityList, detailContent) 
 function rerender(listHeader, entityList, detailContent) {
   renderAiList(listHeader, entityList, detailContent);
   renderAiDetail(detailContent);
+  // Wire clear button (only present when PDF is loaded)
+  document.getElementById('ai-pdf-clear-btn')?.addEventListener('click', () => {
+    _pdfPages = []; _pdfFileName = ''; _status = '';
+    rerender(listHeader, entityList, detailContent);
+  });
 }
 
 // ── Detail panel ──────────────────────────────────────
@@ -196,7 +335,7 @@ function renderAiDetail(detailContent) {
     detailContent.innerHTML = `<div class="ai-working">
       <div class="ai-working-pulse">${_mode === 'extract' ? '◈' : '◎'}</div>
       <div>${esc(_status || 'Processing…')}</div>
-      <div class="ai-working-sub">Claude is working</div>
+      <div class="ai-working-sub">${_source === 'pdf' ? 'Processing chunks…' : 'Claude is working'}</div>
     </div>`;
     return;
   }

@@ -26,6 +26,18 @@ export async function startExtraction(text, existingEntities = [], model = 'simp
   return resp.json();   // { jobId, status: 'processing' }
 }
 
+export async function startPdfExtraction(pages, existingEntities = [], model = 'simple') {
+  const resp = await apiFetch('/extract-pdf', {
+    method: 'POST',
+    body:   JSON.stringify({ pages, existingEntities, model }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+  return resp.json();   // { jobId, status: 'processing' }
+}
+
 export async function startAnalysis(entities, model = 'simple') {
   const resp = await apiFetch('/analyze', {
     method: 'POST',

@@ -80,6 +80,18 @@ Resources:
         - !Sub '${FrontendOrigin}/'
         - 'http://localhost:8080/'
 
+  # ── S3 temp bucket for PDF page data ────────────────────────────────────────
+
+  PdfTempBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'writing-world-pdf-${AWS::AccountId}'
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpirePdfJobs
+            Status: Enabled
+            ExpirationInDays: 1
+
   # ── DynamoDB ─────────────────────────────────────────────────────────────────
 
   WorldTable:
@@ -150,6 +162,12 @@ Resources:
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:writing-world-*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub '${PdfTempBucket.Arn}/*'
 
   # ── Processor Lambda (Strands agent, async, long timeout) ───────────────────
 
@@ -168,6 +186,7 @@ Resources:
           COMPLEX_MODEL: !Ref ComplexModel
           JOBS_TABLE: !Ref JobsTable
           WORLD_TABLE: !Ref WorldTable
+          PDF_BUCKET: !Ref PdfTempBucket
           PROCESSOR_ARN: ''
       Code:
         S3Bucket: !Ref LambdaBucket
@@ -190,6 +209,7 @@ Resources:
           COMPLEX_MODEL: !Ref ComplexModel
           JOBS_TABLE: !Ref JobsTable
           WORLD_TABLE: !Ref WorldTable
+          PDF_BUCKET: !Ref PdfTempBucket
           PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
       Code:
         S3Bucket: !Ref LambdaBucket
@@ -269,6 +289,24 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: 'GET /extract/{jobId}'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PostExtractPdfRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /extract-pdf
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetExtractPdfRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /extract-pdf/{jobId}'
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

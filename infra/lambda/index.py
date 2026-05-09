@@ -5,13 +5,16 @@ from strands.models.bedrock import BedrockModel
 
 ddb = boto3.resource('dynamodb')
 lam = boto3.client('lambda')
+s3  = boto3.client('s3')
 
 TABLE         = os.environ['JOBS_TABLE']
 WORLD_TABLE   = os.environ.get('WORLD_TABLE', '')
 PROCESSOR_ARN = os.environ.get('PROCESSOR_ARN', '')
+PDF_BUCKET    = os.environ.get('PDF_BUCKET', '')
 SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS   = 2000
+PDF_CHUNK_PAGES = 5
 
 def resolve_model(mode):
     return COMPLEX_MODEL if mode == 'complex' else SIMPLE_MODEL
@@ -28,6 +31,10 @@ def handler(event, context):
         return get_world(event)
     if method == 'PUT'  and path.endswith('/world'):
         return put_world(event)
+    if method == 'POST' and path.endswith('/extract-pdf'):
+        return start_job(event, 'extract-pdf')
+    if method == 'GET'  and '/extract-pdf/' in path:
+        return poll(path.split('/')[-1])
     if method == 'POST' and path.endswith('/extract'):
         return start_job(event, 'extract')
     if method == 'GET'  and '/extract/' in path:
@@ -45,27 +52,42 @@ def start_job(event, job_type):
     except Exception:
         return out(400, {'error': 'invalid JSON'})
 
+    job_id = str(uuid.uuid4())
+    ttl    = int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp())
+    now    = datetime.now(timezone.utc).isoformat()
+    mode   = body.get('model', 'simple')
+
+    item = {'jobId': job_id, 'jobType': job_type, 'status': 'processing',
+            'modelMode': mode, 'startedAt': now, 'ttl': ttl}
+
     if job_type == 'extract':
         text = str(body.get('text', '')).strip()
         if not text:
             return out(400, {'error': 'text is required'})
         existing = body.get('existingEntities', [])
-    else:
+        item['text'] = text
+        if existing:
+            item['existing'] = json.dumps(existing)
+
+    elif job_type == 'extract-pdf':
+        pages = body.get('pages', [])
+        if not pages:
+            return out(400, {'error': 'pages is required'})
+        existing = body.get('existingEntities', [])
+        # Store pages in S3 (DynamoDB 400 KB item limit is too small for a novel)
+        s3_key = f'pdf-jobs/{job_id}.json'
+        s3.put_object(Bucket=PDF_BUCKET, Key=s3_key,
+                      Body=json.dumps(pages),
+                      ContentType='application/json')
+        item['s3Key'] = s3_key
+        item['pageCount'] = len(pages)
+        if existing:
+            item['existing'] = json.dumps(existing)
+
+    else:  # analyze
         existing = body.get('entities', [])
         if not existing:
             return out(400, {'error': 'entities is required'})
-        text = None
-
-    job_id = str(uuid.uuid4())
-    ttl    = int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp())
-    now    = datetime.now(timezone.utc).isoformat()
-
-    mode = body.get('model', 'simple')   # 'simple' | 'complex'
-    item = {'jobId': job_id, 'jobType': job_type, 'status': 'processing',
-            'modelMode': mode, 'startedAt': now, 'ttl': ttl}
-    if text:
-        item['text'] = text
-    if existing:
         item['existing'] = json.dumps(existing)
 
     ddb.Table(TABLE).put_item(Item=item)
@@ -146,8 +168,14 @@ def process(event, context):
     try:
         existing  = json.loads(item.get('existing', '[]'))
         model_id  = resolve_model(item.get('modelMode', 'simple'))
+
         if job_type == 'extract':
             result = run_extract_agent(item.get('text', ''), existing, model_id)
+        elif job_type == 'extract-pdf':
+            s3_key = item.get('s3Key', '')
+            obj    = s3.get_object(Bucket=PDF_BUCKET, Key=s3_key)
+            pages  = json.loads(obj['Body'].read())
+            result = run_extract_pdf_agent(pages, existing, model_id)
         else:
             result = run_analyze_agent(existing, model_id)
 
@@ -164,6 +192,98 @@ def process(event, context):
             ExpressionAttributeNames={'#s': 'status', '#e': 'error'},
             ExpressionAttributeValues={':s': 'error', ':e': str(e)},
         )
+
+
+# ── PDF orchestrator agent ────────────────────────────────────────────────────
+
+def run_extract_pdf_agent(pages: list, existing: list, model_id: str) -> dict:
+    """Orchestrator: splits pages into PDF_CHUNK_PAGES-page chunks, runs one sub-agent per chunk."""
+
+    chunks = []
+    for i in range(0, len(pages), PDF_CHUNK_PAGES):
+        chunk_pages = pages[i:i + PDF_CHUNK_PAGES]
+        text = '\n\n'.join(
+            f'[Page {i + j + 1}]\n{chunk_pages[j]}'
+            for j in range(len(chunk_pages))
+        )
+        chunks.append({
+            'index': len(chunks),
+            'start': i + 1,
+            'end':   i + len(chunk_pages),
+            'text':  text,
+        })
+
+    state = {'creates': [], 'updates': [], 'links': [], 'done': set()}
+
+    @tool
+    def process_chunk(chunk_index: int) -> str:
+        """Run a literary analysis sub-agent on a 5-page chunk of the novel.
+
+        Args:
+            chunk_index: 0-based index of the chunk to process
+        """
+        if chunk_index in state['done']:
+            return f"Chunk {chunk_index} already processed."
+        if chunk_index < 0 or chunk_index >= len(chunks):
+            return f"Invalid index {chunk_index}. Valid range: 0–{len(chunks)-1}."
+
+        chunk      = chunks[chunk_index]
+        sub_existing = existing + state['creates']  # pass cumulative creates as context
+        result     = run_extract_agent(chunk['text'], sub_existing, model_id)
+
+        state['creates'].extend(result.get('creates', []))
+        state['updates'].extend(result.get('updates', []))
+        state['links'].extend(result.get('links', []))
+        state['done'].add(chunk_index)
+
+        n_c = len(result.get('creates', []))
+        n_l = len(result.get('links', []))
+        return f"Pages {chunk['start']}–{chunk['end']}: {n_c} new entities, {n_l} links."
+
+    @tool
+    def finalize() -> str:
+        """Deduplicate all results after all chunks are processed. Call exactly once."""
+        state['creates'] = _dedupe(state['creates'])
+        return (f"Finalized: {len(state['creates'])} unique entities, "
+                f"{len(state['updates'])} updates, {len(state['links'])} links.")
+
+    existing_ctx = ''
+    if existing:
+        lines = [
+            f"  [{e['id']}] {e['type'].upper()}: {e['name']}"
+            + (f" ({e.get('role') or e.get('locType') or ''})" if (e.get('role') or e.get('locType')) else '')
+            for e in existing
+        ]
+        existing_ctx = "EXISTING ENTITIES (disambiguate against these):\n" + "\n".join(lines) + "\n\n"
+
+    chunk_list = "\n".join(f"  [{c['index']}] pages {c['start']}–{c['end']}" for c in chunks)
+
+    agent = Agent(
+        model=BedrockModel(model_id=model_id),
+        tools=[process_chunk, finalize],
+        system_prompt=(
+            "You are an orchestrator for literary analysis of a full novel.\n\n"
+            "TASK: Process every chunk in order by calling process_chunk(chunk_index). "
+            "Each call launches a dedicated sub-agent that extracts characters, locations, "
+            "events, artifacts, and relationships from those pages. "
+            "Process chunks sequentially (0, 1, 2, …) so each sub-agent can see entities "
+            "found in earlier chunks and avoid duplicates.\n\n"
+            "After ALL chunks are processed, call finalize() exactly once to deduplicate "
+            "the combined results and produce the final output."
+        ),
+    )
+
+    agent(
+        f"{existing_ctx}"
+        f"Novel split into {len(chunks)} chunk(s):\n{chunk_list}\n\n"
+        "Process all chunks in order, then finalize."
+    )
+
+    return {
+        'creates': _dedupe(state['creates']),
+        'updates': state['updates'],
+        'links':   state['links'],
+    }
 
 
 # ── Extract agent ─────────────────────────────────────────────────────────────
