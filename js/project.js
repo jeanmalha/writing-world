@@ -47,10 +47,30 @@ function _renderProjectList(listHeader, entityList, detailContent, onSaved, onSw
   </div>`;
 
   $('btn-new-project').addEventListener('click', () => {
-    const name = prompt('Project name:', 'New Project');
-    if (name === null) return;
-    store.createProject(name.trim() || 'New Project');
-    onSwitch?.();
+    // Inline create form — avoids native browser prompt which automation can't see
+    if ($('proj-create-form')) return;
+    const form = document.createElement('div');
+    form.id = 'proj-create-form';
+    form.className = 'proj-create-form';
+    form.innerHTML = `
+      <input id="proj-name-input" type="text" value="New Project" placeholder="Project name..." autocomplete="off">
+      <button id="proj-name-save">Create</button>
+      <button id="proj-name-cancel">✕</button>`;
+    entityList.prepend(form);
+    const inp = $('proj-name-input');
+    inp.focus(); inp.select();
+    const commit = () => {
+      const name = inp.value.trim() || 'New Project';
+      form.remove();
+      store.createProject(name);
+      onSwitch?.();
+    };
+    $('proj-name-save').addEventListener('click', commit);
+    $('proj-name-cancel').addEventListener('click', () => form.remove());
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') commit();
+      if (e.key === 'Escape') form.remove();
+    });
   });
 
   const projects = store.listProjects();

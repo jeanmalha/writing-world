@@ -62,9 +62,12 @@ def _run(name, fn):
 def _nova():
     return NovaAct(starting_page=APP_URL, nova_act_api_key=API_KEY)
 
-def _assert(result, expectation):
-    if not result.matches_expectation(expectation):
-        raise AssertionError(f"Expected: {expectation!r}\n      Got: {result.response!r}")
+def _assert(result, expectation='yes'):
+    # ActResult.response holds the agent's plain-text answer.
+    # matches_expectation does not exist in this SDK version — check response directly.
+    response = (result.response or '').strip().lower()
+    if 'yes' not in response[:80]:
+        raise AssertionError(f"Expected affirmative.  Got: {result.response!r}")
 
 # ── Test cases ────────────────────────────────────────────────────────────────
 
@@ -75,7 +78,7 @@ def test_app_loads():
             "Look at the page. Is there a dark sidebar on the left that contains "
             "navigation buttons (at least one of: Characters, Locations, Events, Project, Settings)?"
         )
-        _assert(r, "yes")
+        _assert(r)
 
 def test_characters_view():
     """Characters list panel and + New button load."""
@@ -83,7 +86,7 @@ def test_characters_view():
         nova.act("Click on 'Characters' in the sidebar. "
                  "If Characters is not visible, click the first entity-type button.")
         r = nova.act("Is there a centre panel titled 'CHARACTERS' with a '+ New' button?")
-        _assert(r, "yes")
+        _assert(r)
 
 def test_create_edit_delete_entity():
     """Full create → edit → delete lifecycle for a character."""
@@ -94,21 +97,21 @@ def test_create_edit_delete_entity():
                  "In the Role field type 'Test Role'. Click Save.")
 
         r = nova.act("Is 'NOVATEST_CHAR' now listed in the character list?")
-        _assert(r, "yes")
+        _assert(r)
 
         # Edit
         nova.act("Click the Edit button in the detail panel on the right.")
         nova.act("Clear the Description textarea and type 'Automated test character'. Click Save.")
 
         r = nova.act("Does the detail panel show 'Automated test character' in the description area?")
-        _assert(r, "yes")
+        _assert(r)
 
         # Delete
         nova.act("Click the Delete button in the detail panel.")
         nova.act("Click OK or Confirm in the browser confirmation dialog.")
 
         r = nova.act("Is 'NOVATEST_CHAR' gone from the character list?")
-        _assert(r, "yes")
+        _assert(r)
 
 def test_search():
     """Search input filters results."""
@@ -118,7 +121,7 @@ def test_search():
             "Does the centre panel show a search view — either 'No results' or a "
             "count of results for the search term?"
         )
-        _assert(r, "yes")
+        _assert(r)
 
 def test_timeline_view():
     """Timeline view renders."""
@@ -128,7 +131,7 @@ def test_timeline_view():
             "Does the centre panel now show the Timeline view? "
             "It should say TIMELINE at the top or show a message about adding events."
         )
-        _assert(r, "yes")
+        _assert(r)
 
 def test_board_view():
     """Board view takes over the full content area."""
@@ -138,7 +141,7 @@ def test_board_view():
             "Has the layout switched to a full-width board canvas? "
             "The list and detail panels should have disappeared."
         )
-        _assert(r, "yes")
+        _assert(r)
 
 def test_project_view():
     """Project view shows a list of projects."""
@@ -147,30 +150,31 @@ def test_project_view():
         r = nova.act(
             "Does the centre panel show 'PROJECTS' as the title with a '+ New' button?"
         )
-        _assert(r, "yes")
+        _assert(r)
 
 def test_create_switch_project():
-    """Create a second project and switch to it."""
+    """Create a second project via inline form and switch to it."""
     with _nova() as nova:
-        nova.act("Click the Project button at the top of the sidebar.")
-        nova.act("Click the '+ New' button to create a new project.")
-        nova.act("In the browser prompt that appears, clear the text, type 'NOVATEST_PROJECT', and click OK.")
+        nova.act("Click the Project button at the top of the sidebar (the ◈ icon or 'Project' label).")
+        nova.act("Click the '+ New' button in the Projects panel header.")
+        nova.act(
+            "An inline text input should now appear at the top of the project list. "
+            "Clear it, type 'NOVATEST_PROJECT', then click the 'Create' button next to it."
+        )
 
         r = nova.act(
-            "Is 'NOVATEST_PROJECT' now listed in the projects panel, "
-            "and does the sidebar show it as the active project?"
+            "Is 'NOVATEST_PROJECT' now listed in the projects panel "
+            "and highlighted as the active project?"
         )
-        _assert(r, "yes")
+        _assert(r)
 
-        # Switch back to the first project
-        nova.act(
-            "Click on the first project in the list that is NOT 'NOVATEST_PROJECT' to switch to it."
-        )
+        # Switch back to the first project (any project that isn't NOVATEST_PROJECT)
+        nova.act("Click on any project in the list that is NOT 'NOVATEST_PROJECT' to switch to it.")
 
-        # Delete the test project
-        nova.act("Click on 'NOVATEST_PROJECT' to select it.")
-        nova.act("Click the 'Delete Project' button in the detail panel on the right.")
-        nova.act("Click OK in the confirmation dialog.")
+        # Delete the test project via detail panel
+        nova.act("Click on 'NOVATEST_PROJECT' in the project list to select it.")
+        nova.act("Click the 'Delete Project' button that appears in the right detail panel.")
+        nova.act("Click OK or Confirm in the confirmation dialog.")
 
 def test_settings_toggle():
     """Toggling a type in Settings removes it from the sidebar."""
@@ -180,12 +184,12 @@ def test_settings_toggle():
             "Does the centre panel show settings with checkboxes for entity types "
             "(e.g. Characters, Locations, Events)?"
         )
-        _assert(r, "yes")
+        _assert(r)
 
         # Toggle Locations off then back on
         nova.act("Uncheck the 'Locations' checkbox.")
         r = nova.act("Is 'Locations' no longer visible in the sidebar entity-type navigation?")
-        _assert(r, "yes")
+        _assert(r)
 
         nova.act("Check the 'Locations' checkbox again to restore it.")
 
@@ -197,7 +201,7 @@ def test_ai_panel_visible():
             "Is there a panel visible that either shows AI extract controls (text area, extract button) "
             "or a 'Sign In' prompt indicating AI features require login?"
         )
-        _assert(r, "yes")
+        _assert(r)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

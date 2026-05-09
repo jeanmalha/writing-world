@@ -1522,7 +1522,37 @@ body.board-mode #board-panel {
 }
 
 /* ── Settings ──────────────────────────────────────── */
-.proj-active-dot { color: var(--accent); font-size: 10px; }
+.proj-active-dot  { color: var(--accent); font-size: 10px; }
+
+.proj-create-form {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(59,130,246,0.05);
+}
+.proj-create-form input {
+  flex: 1; min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 4px 6px;
+  outline: none;
+}
+.proj-create-form button {
+  padding: 3px 8px;
+  font-family: var(--font);
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid var(--panel-border);
+  background: none;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+#proj-name-save { background: var(--accent); border-color: var(--accent); color: #fff; }
+#proj-name-save:hover { background: var(--accent-dim); }
 .proj-structure  { margin-top: 4px; }
 
 .settings-section { padding: 8px 12px; }
