@@ -9,8 +9,12 @@ lam = boto3.client('lambda')
 TABLE         = os.environ['JOBS_TABLE']
 WORLD_TABLE   = os.environ.get('WORLD_TABLE', '')
 PROCESSOR_ARN = os.environ.get('PROCESSOR_ARN', '')
-MODEL_ID      = os.environ['MODEL']
+SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
+COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS   = 2000
+
+def resolve_model(mode):
+    return COMPLEX_MODEL if mode == 'complex' else SIMPLE_MODEL
 
 
 # ── API handler ──────────────────────────────────────────────────────────────
@@ -56,8 +60,9 @@ def start_job(event, job_type):
     ttl    = int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp())
     now    = datetime.now(timezone.utc).isoformat()
 
+    mode = body.get('model', 'simple')   # 'simple' | 'complex'
     item = {'jobId': job_id, 'jobType': job_type, 'status': 'processing',
-            'startedAt': now, 'ttl': ttl}
+            'modelMode': mode, 'startedAt': now, 'ttl': ttl}
     if text:
         item['text'] = text
     if existing:
@@ -139,11 +144,12 @@ def process(event, context):
         return
 
     try:
-        existing = json.loads(item.get('existing', '[]'))
+        existing  = json.loads(item.get('existing', '[]'))
+        model_id  = resolve_model(item.get('modelMode', 'simple'))
         if job_type == 'extract':
-            result = run_extract_agent(item.get('text', ''), existing)
+            result = run_extract_agent(item.get('text', ''), existing, model_id)
         else:
-            result = run_analyze_agent(existing)
+            result = run_analyze_agent(existing, model_id)
 
         table.update_item(
             Key={'jobId': job_id},
@@ -162,12 +168,13 @@ def process(event, context):
 
 # ── Extract agent ─────────────────────────────────────────────────────────────
 
-def run_extract_agent(text: str, existing: list) -> dict:
+def run_extract_agent(text: str, existing: list, model_id: str) -> dict:
     words  = text.split()
     state  = {
         'queue':   [' '.join(words[i:i+CHUNK_WORDS]) for i in range(0, len(words), CHUNK_WORDS)],
         'creates': [],
         'updates': [],
+        'links':   [],
     }
     total = len(state['queue'])
 
@@ -192,7 +199,10 @@ def run_extract_agent(text: str, existing: list) -> dict:
     @tool
     def create_entity(entity_type: str, name: str, description: str,
                       role: str = '', loc_type: str = '',
-                      date: str = '', importance: str = '') -> str:
+                      date: str = '', importance: str = '',
+                      gender: str = '', skin_tone: str = '',
+                      hair_style: str = '', hair_color: str = '',
+                      eye_color: str = '') -> str:
         """Create a NEW entity not found in the existing entity list.
 
         Args:
@@ -203,10 +213,17 @@ def run_extract_agent(text: str, existing: list) -> dict:
             loc_type: locations only (e.g. Planet, Station, Ship)
             date: events only
             importance: events only — Critical | Major | Minor | Background
+            gender: characters only — Female | Male | Non-binary
+            skin_tone: characters only — Very fair | Fair | Light | Medium | Olive | Brown | Dark | Very dark
+            hair_style: characters only — Bald | Cropped | Short | Medium | Long | Very long
+            hair_color: characters only — Black | Dark brown | Brown | Light brown | Blonde | Auburn | Red | Gray | White
+            eye_color: characters only — Dark brown | Brown | Hazel | Amber | Green | Blue | Light blue | Gray
         """
         entry = {k: v for k, v in {
             'type': entity_type, 'name': name, 'description': description,
             'role': role, 'locType': loc_type, 'date': date, 'importance': importance,
+            'gender': gender, 'skinTone': skin_tone,
+            'hairStyle': hair_style, 'hairColor': hair_color, 'eyeColor': eye_color,
         }.items() if v}
         state['creates'].append(entry)
         return f"Queued creation: {entity_type} '{name}'"
@@ -217,31 +234,58 @@ def run_extract_agent(text: str, existing: list) -> dict:
 
         Args:
             entity_id: the [ID] from the existing entity list
-            field_updates: dict of fields to update, e.g. {"description": "...", "status": "Active"}
+            field_updates: dict of fields to update — any entity field including
+                           gender, skinTone, hairStyle, hairColor, eyeColor for characters
         """
         state['updates'].append({'id': entity_id, 'changes': field_updates})
         return f"Queued update for {entity_id}"
 
+    @tool
+    def create_link(source_name: str, target_name: str, label: str) -> str:
+        """Record a relationship between two entities (referenced by name).
+        Call this whenever the text describes a connection between entities.
+
+        Args:
+            source_name: exact name of the source entity
+            target_name: exact name of the target entity
+            label: short directional label (e.g. 'commands', 'member of',
+                   'located in', 'created by', 'participated in', 'allied with')
+        """
+        state['links'].append({'sourceName': source_name, 'targetName': target_name, 'label': label})
+        return f"Linked: '{source_name}' --[{label}]--> '{target_name}'"
+
     agent = Agent(
-        model=BedrockModel(model_id=MODEL_ID),
-        tools=[get_next_chunk, create_entity, update_entity],
+        model=BedrockModel(model_id=model_id),
+        tools=[get_next_chunk, create_entity, update_entity, create_link],
         system_prompt=(
-            "You are a literary analyst. Extract entities from novel text chunks. "
-            "When an entity matches one from the EXISTING ENTITIES list, call update_entity. "
-            "When it is genuinely new, call create_entity. "
-            "Use get_next_chunk to retrieve text and repeat until NO_MORE_CHUNKS."
+            "You are a literary analyst extracting structured data from novel text.\n\n"
+            "ENTITIES: Call create_entity for every named character, location, faction, species, "
+            "event, or artifact. If it matches an existing entity, call update_entity instead.\n\n"
+            "PHYSICAL TRAITS: For characters, extract appearance from the text when mentioned. "
+            "Example: 'her dark brown skin and cropped silver hair' → skinTone='Brown', "
+            "hairColor='Gray', hairStyle='Cropped'. "
+            "Example: 'the tall man's blue eyes narrowed' → eyeColor='Blue'.\n\n"
+            "RELATIONSHIPS: Call create_link for every relationship mentioned in the text. "
+            "Example: 'Captain Reyes commanded the Argo' → create_link('Captain Reyes','Argo','commands'). "
+            "Example: 'Mira was a member of the Veil faction' → create_link('Mira','Veil','member of'). "
+            "Example: 'The battle of Kepler Station' → create_link('Battle of Kepler','Kepler Station','took place at').\n\n"
+            "Process all chunks with get_next_chunk before finishing."
         ),
     )
 
     agent(f"{existing_ctx}Process the {total} text chunk(s). "
           "Call get_next_chunk, then create_entity or update_entity for each entity found.")
 
-    return {'creates': _dedupe(state['creates']), 'updates': state['updates']}
+    return {
+        'creates': _dedupe(state['creates']),
+        'updates': state['updates'],
+        'links':   state['links'],
+    }
 
 
 # ── Analyze agent ─────────────────────────────────────────────────────────────
 
-def run_analyze_agent(entities: list) -> dict:
+def run_analyze_agent(entities: list, model_id: str) -> dict:
     state = {'links': [], 'merges': []}
 
     lines = []
@@ -288,13 +332,19 @@ def run_analyze_agent(entities: list) -> dict:
         return f"Suggested merge: keep {keep_id}, discard {merge_id}"
 
     agent = Agent(
-        model=BedrockModel(model_id=MODEL_ID),
+        model=BedrockModel(model_id=model_id),
         tools=[suggest_link, suggest_merge],
         system_prompt=(
-            "You are a literary analyst. Given a world's entity list, identify:\n"
-            "1. Meaningful relationships not yet linked — call suggest_link\n"
-            "2. Probable duplicate entities with different names — call suggest_merge\n"
-            "Only suggest high-confidence items. Skip links that already exist."
+            "You are a literary analyst. Given a list of novel entities, suggest:\n\n"
+            "MISSING LINKS: Relationships that should exist but aren't recorded. "
+            "Example: a character whose role is 'Captain' probably commands a ship entity → "
+            "suggest_link(captain_id, ship_id, 'commands'). "
+            "Example: a character from a named faction → suggest_link(char_id, faction_id, 'member of'). "
+            "Example: an event at a named location → suggest_link(event_id, location_id, 'took place at').\n\n"
+            "DUPLICATES: Entities that are likely the same thing with different names. "
+            "Example: 'Dr Chen' and 'Doctor Chen' are the same person → suggest_merge(keep_id, dupe_id, reason). "
+            "Example: 'New Shanghai' and 'New Shanghai Colony' → suggest_merge.\n\n"
+            "Only suggest high-confidence items. Skip links that already exist (shown after 'links:')."
         ),
     )
 

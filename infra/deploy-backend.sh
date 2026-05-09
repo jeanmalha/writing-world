@@ -66,9 +66,8 @@ success "Lambda package uploaded."
 
 # ── 4. Deploy CloudFormation ───────────────────────────────────────────────────
 PARAM_OVERRIDES="CognitoDomainPrefix=${COGNITO_DOMAIN_PREFIX:?} LambdaBucket=${LAMBDA_BUCKET}"
-if [[ -n "${BEDROCK_MODEL:-}" ]]; then
-  PARAM_OVERRIDES="$PARAM_OVERRIDES BedrockModel=$BEDROCK_MODEL"
-fi
+[[ -n "${SIMPLE_MODEL:-}"  ]] && PARAM_OVERRIDES="$PARAM_OVERRIDES SimpleModel=$SIMPLE_MODEL"
+[[ -n "${COMPLEX_MODEL:-}" ]] && PARAM_OVERRIDES="$PARAM_OVERRIDES ComplexModel=$COMPLEX_MODEL"
 
 info "Deploying backend stack '$STACK'…"
 aws cloudformation deploy \

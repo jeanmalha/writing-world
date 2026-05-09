@@ -4,11 +4,17 @@ import { startExtraction, startAnalysis, pollJob } from './api.js';
 
 // Module state — persists while AI view is active
 let _mode    = 'extract';   // 'extract' | 'analyze'
+let _model   = 'simple';    // 'simple'  | 'complex'
 let _text    = '';
 let _results = null;
 let _status  = '';
 let _loading = false;
 let _polling = false;
+
+const MODEL_LABEL = {
+  simple:  { name: 'Simple',  hint: 'Fast · GPT OSS 20B' },
+  complex: { name: 'Complex', hint: 'Thorough · Claude Sonnet' },
+};
 
 function esc(s) {
   return String(s || '')
@@ -57,6 +63,14 @@ function renderAiList(listHeader, entityList, detailContent) {
     if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
   });
 
+  entityList.querySelectorAll('.ai-model-btn').forEach(btn =>
+    btn.addEventListener('click', () => {
+      if (_model !== btn.dataset.model) {
+        _model = btn.dataset.model;
+        rerender(listHeader, entityList, detailContent);
+      }
+    }));
+
   const ta  = document.getElementById('ai-textarea');
   const btn = document.getElementById('btn-ai-run');
 
@@ -68,9 +82,20 @@ function renderAiList(listHeader, entityList, detailContent) {
   });
 }
 
+function modelToggleHtml() {
+  return `<div class="ai-model-toggle">
+    ${['simple', 'complex'].map(m => `
+      <button class="ai-model-btn${_model === m ? ' active' : ''}" data-model="${m}">
+        <span class="ai-model-name">${MODEL_LABEL[m].name}</span>
+        <span class="ai-model-hint">${MODEL_LABEL[m].hint}</span>
+      </button>`).join('')}
+  </div>`;
+}
+
 function renderExtractInput() {
   return `<div class="ai-input-area">
-    <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;Claude will extract and match against your existing entities.">${esc(_text)}</textarea>
+    ${modelToggleHtml()}
+    <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The model will extract and match against your existing entities.">${esc(_text)}</textarea>
     <button id="btn-ai-run" ${_loading ? 'disabled' : ''}>
       ${_loading ? '◈ Extracting…' : '▶ Extract'}
     </button>
@@ -81,8 +106,9 @@ function renderExtractInput() {
 function renderAnalyzeInput() {
   const count = store.totalCount();
   return `<div class="ai-input-area">
+    ${modelToggleHtml()}
     <div class="ai-analyze-desc">
-      Claude will analyze your <strong>${count}</strong> existing entr${count !== 1 ? 'ies' : 'y'} and suggest missing links and potential duplicates to merge.
+      Analyzes your <strong>${count}</strong> existing entr${count !== 1 ? 'ies' : 'y'} and suggests missing links and potential duplicates.
     </div>
     <button id="btn-ai-run" ${_loading || count === 0 ? 'disabled' : ''}>
       ${_loading ? '◎ Analyzing…' : '▶ Analyze World'}
@@ -107,7 +133,7 @@ async function runExtract(listHeader, entityList, detailContent) {
     ...(e.date     ? { date:    e.date    } : {}),
   }));
 
-  await runJob(() => startExtraction(_text, existingEntities), 'extract',
+  await runJob(() => startExtraction(_text, existingEntities, _model), 'extract',
                listHeader, entityList, detailContent);
 }
 
@@ -125,7 +151,7 @@ async function runAnalyze(listHeader, entityList, detailContent) {
   }));
 
   if (!entities.length) return;
-  await runJob(() => startAnalysis(entities), 'analyze',
+  await runJob(() => startAnalysis(entities, _model), 'analyze',
                listHeader, entityList, detailContent);
 }
 
@@ -190,20 +216,23 @@ function renderAiDetail(detailContent) {
 
 // ── Extract results ───────────────────────────────────
 function renderExtractResults(detailContent) {
-  const { creates = [], updates = [] } = _results;
-  const total = creates.length + updates.length;
+  const { creates = [], updates = [], links = [] } = _results;
+  const total = creates.length + updates.length + links.length;
 
   if (!total) {
     detailContent.innerHTML = `<div class="empty-state detail-empty">No entities found.</div>`;
     return;
   }
 
+  const PHYSICAL_KEYS = ['gender', 'skinTone', 'hairColor', 'hairStyle', 'eyeColor'];
+
   const createsHtml = creates.length ? `
     <div class="ai-section">
       <div class="ai-section-title" style="color:var(--accent)">▸ NEW (${creates.length})</div>
       ${creates.map((item, i) => {
-        const def = TYPES[item.type] || TYPES.lore;
-        const sub = item.role || item.locType || item.date || '';
+        const def     = TYPES[item.type] || TYPES.lore;
+        const sub     = item.role || item.locType || item.date || '';
+        const traits  = PHYSICAL_KEYS.map(k => item[k]).filter(Boolean);
         return `<label class="ai-item">
           <input type="checkbox" class="ai-cb ai-cb-create" data-index="${i}" checked>
           <div class="ai-item-body">
@@ -211,6 +240,7 @@ function renderExtractResults(detailContent) {
               <span style="color:${def.color}">${def.icon}</span> ${esc(item.name || '?')}
             </div>
             ${sub ? `<div class="ai-item-sub">${esc(sub)}</div>` : ''}
+            ${traits.length ? `<div class="ai-item-traits">${traits.map(t => `<span class="ai-trait">${esc(t)}</span>`).join('')}</div>` : ''}
             ${item.description ? `<div class="ai-item-desc">${esc(item.description)}</div>` : ''}
           </div>
         </label>`;
@@ -239,23 +269,55 @@ function renderExtractResults(detailContent) {
       }).filter(Boolean).join('')}
     </div>` : '';
 
+  const linksHtml = links.length ? `
+    <div class="ai-section">
+      <div class="ai-section-title" style="color:var(--text-muted)">▸ LINKS (${links.length})</div>
+      ${links.map((l, i) => `
+        <label class="ai-item">
+          <input type="checkbox" class="ai-cb ai-cb-link" data-index="${i}" checked>
+          <div class="ai-item-body">
+            <div class="ai-item-name">
+              ${esc(l.sourceName)}
+              <span class="ai-link-arrow"> —[${esc(l.label)}]→ </span>
+              ${esc(l.targetName)}
+            </div>
+          </div>
+        </label>`).join('')}
+    </div>` : '';
+
   detailContent.innerHTML = `
     <div class="ai-results-header">
       <span>${total} change${total !== 1 ? 's' : ''}</span>
       <button id="btn-import-checked">Import Selected</button>
     </div>
-    ${createsHtml}${updatesHtml}`;
+    ${createsHtml}${updatesHtml}${linksHtml}`;
 
   document.getElementById('btn-import-checked')?.addEventListener('click', () => {
+    // Build name → entity ID map (existing entities first)
+    const nameToId = {};
+    store.getAll().forEach(e => { if (e.name) nameToId[e.name.toLowerCase()] = e.id; });
+
     let applied = 0;
     detailContent.querySelectorAll('.ai-cb-create:checked').forEach(cb => {
       const item = creates[parseInt(cb.dataset.index)];
-      if (item) { importCreate(item); applied++; }
+      if (item) {
+        const entity = importCreate(item);
+        if (entity?.name) nameToId[entity.name.toLowerCase()] = entity.id;
+        applied++;
+      }
     });
     detailContent.querySelectorAll('.ai-cb-update:checked').forEach(cb => {
       const upd = updates[parseInt(cb.dataset.index)];
       if (upd && store.get(upd.id)) { store.update(upd.id, upd.changes); applied++; }
     });
+    detailContent.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
+      const l   = links[parseInt(cb.dataset.index)];
+      if (!l)   return;
+      const src = nameToId[l.sourceName?.toLowerCase()];
+      const tgt = nameToId[l.targetName?.toLowerCase()];
+      if (src && tgt && src !== tgt) { store.addLink(src, tgt, l.label); applied++; }
+    });
+
     _results = null; _text = '';
     detailContent.innerHTML = `<div class="empty-state detail-empty">
       Applied ${applied} change${applied !== 1 ? 's' : ''}.<br>Paste more text to continue.
@@ -373,5 +435,11 @@ function importCreate(item) {
   if (item.locType)    fields.locType    = item.locType;
   if (item.date)       fields.date       = item.date;
   if (item.importance) fields.importance = item.importance;
+  if (item.gender)     fields.gender     = item.gender;
+  if (item.skinTone)   fields.skinTone   = item.skinTone;
+  if (item.hairStyle)  fields.hairStyle  = item.hairStyle;
+  if (item.hairColor)  fields.hairColor  = item.hairColor;
+  if (item.eyeColor)   fields.eyeColor   = item.eyeColor;
   store.update(entity.id, fields);
+  return store.get(entity.id);  // return with name set, for link resolution
 }
