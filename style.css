@@ -1197,13 +1197,14 @@ body.board-mode #board-panel {
 
 .bc-avatar {
   flex-shrink: 0;
-  width: 44px;
+  width: 48px;
   align-self: flex-start;
   border-radius: 4px;
   overflow: hidden;
-  opacity: 0.92;
+  background: #F0F0F0;
 }
-.bc-avatar svg { display: block; }
+.bc-avatar svg,
+.bc-avatar-img { display: block; width: 48px; height: 58px; }
 
 .bc-name {
   font-size: 13px;
