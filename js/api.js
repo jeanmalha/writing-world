@@ -50,6 +50,16 @@ export async function startAnalysis(entities, model = 'simple') {
   return resp.json();   // { jobId, status: 'processing' }
 }
 
+export async function submitInterest(name, email, subscriptionInterest) {
+  const resp = await fetch(`${AUTH_CONFIG.apiEndpoint}/interest`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ name, email, subscriptionInterest }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function loadWorld() {
   const resp = await apiFetch('/world');
   if (resp.status === 404) return null;

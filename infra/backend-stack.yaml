@@ -80,6 +80,13 @@ Resources:
         - !Sub '${FrontendOrigin}/'
         - 'http://localhost:8080/'
 
+  # ── S3 bucket for interest form submissions ──────────────────────────────────
+
+  InterestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'writing-world-interest-${AWS::AccountId}'
+
   # ── S3 temp bucket for PDF page data ────────────────────────────────────────
 
   PdfTempBucket:
@@ -168,6 +175,14 @@ Resources:
                   - s3:GetObject
                   - s3:DeleteObject
                 Resource: !Sub '${PdfTempBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt InterestBucket.Arn
+                  - !Sub '${InterestBucket.Arn}/*'
 
   # ── Processor Lambda (Strands agent, async, long timeout) ───────────────────
 
@@ -187,6 +202,7 @@ Resources:
           JOBS_TABLE: !Ref JobsTable
           WORLD_TABLE: !Ref WorldTable
           PDF_BUCKET: !Ref PdfTempBucket
+          INTEREST_BUCKET: !Ref InterestBucket
           PROCESSOR_ARN: ''
       Code:
         S3Bucket: !Ref LambdaBucket
@@ -210,6 +226,7 @@ Resources:
           JOBS_TABLE: !Ref JobsTable
           WORLD_TABLE: !Ref WorldTable
           PDF_BUCKET: !Ref PdfTempBucket
+          INTEREST_BUCKET: !Ref InterestBucket
           PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
       Code:
         S3Bucket: !Ref LambdaBucket
@@ -256,6 +273,14 @@ Resources:
       IntegrationType: AWS_PROXY
       IntegrationUri: !GetAtt ExtractFunction.Arn
       PayloadFormatVersion: '2.0'
+
+  PostInterestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /interest
+      AuthorizationType: NONE
+      Target: !Sub 'integrations/${ExtractIntegration}'
 
   GetWorldRoute:
     Type: AWS::ApiGatewayV2::Route

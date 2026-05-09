@@ -10,8 +10,9 @@ s3  = boto3.client('s3')
 TABLE         = os.environ['JOBS_TABLE']
 WORLD_TABLE   = os.environ.get('WORLD_TABLE', '')
 PROCESSOR_ARN = os.environ.get('PROCESSOR_ARN', '')
-PDF_BUCKET    = os.environ.get('PDF_BUCKET', '')
-SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
+PDF_BUCKET      = os.environ.get('PDF_BUCKET', '')
+INTEREST_BUCKET = os.environ.get('INTEREST_BUCKET', '')
+SIMPLE_MODEL    = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS   = 2000
 PDF_CHUNK_PAGES = 5
@@ -27,6 +28,8 @@ def handler(event, context):
     method = ctx.get('method', '')
     path   = ctx.get('path', '').rstrip('/')
 
+    if method == 'POST' and path.endswith('/interest'):
+        return handle_interest(event)
     if method == 'GET'  and path.endswith('/world'):
         return get_world(event)
     if method == 'PUT'  and path.endswith('/world'):
@@ -116,6 +119,41 @@ def poll(job_id):
     elif status == 'error':
         resp['error'] = item.get('error', 'Processing timed out or failed')
     return out(200, resp)
+
+
+# ── Interest form ────────────────────────────────────────────────────────────
+
+def handle_interest(event):
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(400, {'error': 'invalid JSON'})
+
+    email = str(body.get('email', '')).strip()[:320]
+    if not email:
+        return out(400, {'error': 'email is required'})
+
+    name = str(body.get('name', '')).strip()[:200]
+    sub  = bool(body.get('subscriptionInterest', False))
+    now  = datetime.now(timezone.utc)
+
+    record = {
+        'timestamp':            now.isoformat(),
+        'name':                 name,
+        'email':                email,
+        'subscriptionInterest': sub,
+    }
+
+    if INTEREST_BUCKET:
+        key = f"submissions/{now.strftime('%Y/%m/%d')}/{uuid.uuid4()}.json"
+        s3.put_object(
+            Bucket=INTEREST_BUCKET,
+            Key=key,
+            Body=json.dumps(record, indent=2),
+            ContentType='application/json',
+        )
+
+    return out(200, {'ok': True})
 
 
 # ── World persistence ─────────────────────────────────────────────────────────

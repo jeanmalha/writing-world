@@ -1,4 +1,5 @@
 import { store, TYPES, TYPE_FIELDS } from './store.js';
+import { initSplash, showSplash } from './splash.js';
 import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail } from './auth.js';
 import { renderAiView } from './ai-panel.js';
 import { renderProjectView, renderSettingsView } from './project.js';
@@ -774,6 +775,7 @@ $('save-name-input').addEventListener('keydown', e => {
 });
 
 // ── Init ────────────────────────────────────────────────
+$('btn-about')?.addEventListener('click', showSplash);
 $('btn-export').addEventListener('click', () => store.exportJSON());
 $('import-file').addEventListener('change', async e => {
   const file = e.target.files[0];
@@ -804,6 +806,7 @@ async function init() {
   if (isAuthEnabled && window.location.search.includes('code=')) {
     await handleCallback().catch(console.error);
   }
+  initSplash();
   initBoard(entityId => {
     const e = store.get(entityId);
     if (!e) return;
