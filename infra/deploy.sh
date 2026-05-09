@@ -146,7 +146,23 @@ INVALIDATION_ID=$(aws cloudfront create-invalidation \
 
 success "Invalidation created: $INVALIDATION_ID"
 
-# ── 6. Done ───────────────────────────────────────────
+# ── 6. Functional tests (optional) ───────────────────
+TESTS_SCRIPT="$(dirname "$0")/../tests/smoke.py"
+if python3 -c "import nova_act" 2>/dev/null && [[ -f "$TESTS_SCRIPT" ]] && [[ -n "${NOVA_ACT_API_KEY:-}" ]]; then
+  echo ""
+  info "Waiting 20s for CloudFront invalidation to propagate…"
+  sleep 20
+  info "Running smoke tests against https://${DOMAIN} …"
+  python3 "$TESTS_SCRIPT" --url "https://${DOMAIN}" || warn "Some smoke tests failed — see output above."
+else
+  if [[ -z "${NOVA_ACT_API_KEY:-}" ]]; then
+    warn "Skipping smoke tests (NOVA_ACT_API_KEY not set in deploy.env)."
+  elif ! python3 -c "import nova_act" 2>/dev/null; then
+    warn "Skipping smoke tests (nova-act not installed: pip install nova-act)."
+  fi
+fi
+
+# ── 7. Done ───────────────────────────────────────────
 echo ""
 success "Deployment complete! (version: $DEPLOY_VERSION)"
 echo -e "  ${GREEN}https://${DOMAIN}${NC}"
