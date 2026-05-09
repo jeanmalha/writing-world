@@ -16,12 +16,22 @@
       <input type="search" id="search-input" placeholder="Search all entries..." autocomplete="off" />
     </div>
     <nav id="type-nav"></nav>
+    <div id="saves-panel">
+      <div class="saves-panel-head">LOCAL SAVES</div>
+      <div class="saves-create">
+        <input id="save-name-input" type="text" placeholder="Name this save..." autocomplete="off">
+        <button id="btn-do-save">Save</button>
+      </div>
+      <div id="saves-list-inner" class="saves-list"></div>
+    </div>
     <div class="sidebar-footer">
       <button id="btn-export">&#8593; Export JSON</button>
       <label class="btn-file">
         &#8595; Import JSON
         <input type="file" id="import-file" accept=".json" />
       </label>
+      <button id="btn-saves">&#9632; Saves</button>
+      <div id="auth-status"></div>
     </div>
   </aside>
 
@@ -34,6 +44,19 @@
     <div id="detail-content"></div>
   </div>
 
+  <div id="board-panel">
+    <div id="board-toolbar"></div>
+    <div id="board-canvas"></div>
+  </div>
+
+  <div id="board-modal" class="board-modal-overlay">
+    <div class="board-modal-box">
+      <button id="btn-board-modal-close">&#215;</button>
+      <div id="board-modal-body"></div>
+    </div>
+  </div>
+
+  <div id="sync-banner"></div>
   <footer id="statusbar">
     <span id="status-text">Ready</span>
   </footer>

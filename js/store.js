@@ -1,4 +1,10 @@
-const LS_KEY = 'writingworld_v1';
+const LS_KEY   = 'writingworld_v1';
+const SNAP_KEY = 'writingworld_snapshots';
+
+function loadSnaps() {
+  try { return JSON.parse(localStorage.getItem(SNAP_KEY) || '[]'); }
+  catch { return []; }
+}
 
 export const TYPES = {
   character: { label: 'Characters', icon: '◉', color: '#818cf8' },
@@ -45,9 +51,14 @@ function load() {
   catch { return { version: 1, entities: {} }; }
 }
 
+const _persistCallbacks = [];
+
 function persist(data) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(data)); return true; }
-  catch (e) { console.error('Save failed', e); return false; }
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+    _persistCallbacks.forEach(fn => fn());
+    return true;
+  } catch (e) { console.error('Save failed', e); return false; }
 }
 
 let _data = load();
@@ -68,7 +79,7 @@ export const store = {
   create(type) {
     const id   = crypto.randomUUID();
     const now  = new Date().toISOString();
-    const entity = { id, type, name: '', description: '', tags: [], links: [], createdAt: now, updatedAt: now };
+    const entity = { id, type, name: '', description: '', tags: [], links: [], timelineNotes: [], createdAt: now, updatedAt: now };
     _data.entities[id] = entity;
     persist(_data);
     return entity;
@@ -123,6 +134,54 @@ export const store = {
     return result;
   },
 
+  // ── Timeline Notes ──────────────────────────────────
+
+  addTimelineNote(entityId, date, text) {
+    const e = _data.entities[entityId];
+    if (!e) return null;
+    if (!e.timelineNotes) e.timelineNotes = [];
+    const note = { id: crypto.randomUUID(), date, text };
+    e.timelineNotes.push(note);
+    e.timelineNotes.sort((a, b) => a.date.localeCompare(b.date));
+    e.updatedAt = new Date().toISOString();
+    persist(_data);
+    return note;
+  },
+
+  updateTimelineNote(entityId, noteId, date, text) {
+    const e = _data.entities[entityId];
+    if (!e || !e.timelineNotes) return;
+    const note = e.timelineNotes.find(n => n.id === noteId);
+    if (!note) return;
+    note.date = date;
+    note.text = text;
+    e.timelineNotes.sort((a, b) => a.date.localeCompare(b.date));
+    e.updatedAt = new Date().toISOString();
+    persist(_data);
+  },
+
+  deleteTimelineNote(entityId, noteId) {
+    const e = _data.entities[entityId];
+    if (!e || !e.timelineNotes) return;
+    e.timelineNotes = e.timelineNotes.filter(n => n.id !== noteId);
+    e.updatedAt = new Date().toISOString();
+    persist(_data);
+  },
+
+  worldStateAt(date) {
+    if (!date) return [];
+    const result = [];
+    for (const e of Object.values(_data.entities)) {
+      const notes = (e.timelineNotes || [])
+        .filter(n => n.date && n.date.localeCompare(date) <= 0)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      if (notes.length) result.push({ entity: e, note: notes[0] });
+    }
+    result.sort((a, b) =>
+      a.entity.type.localeCompare(b.entity.type) || a.entity.name.localeCompare(b.entity.name));
+    return result;
+  },
+
   // ── Queries ─────────────────────────────────────────
 
   search(query) {
@@ -154,6 +213,31 @@ export const store = {
 
   totalCount() { return Object.keys(_data.entities).length; },
 
+  // ── Snapshots ────────────────────────────────────────
+
+  saveSnapshot(name) {
+    const snaps = loadSnaps();
+    snaps.unshift({ id: crypto.randomUUID(), name, savedAt: new Date().toISOString(), data: JSON.parse(JSON.stringify(_data)) });
+    if (snaps.length > 20) snaps.splice(20);
+    try { localStorage.setItem(SNAP_KEY, JSON.stringify(snaps)); return true; }
+    catch (e) { console.error('Snapshot save failed', e); return false; }
+  },
+
+  listSnapshots() { return loadSnaps(); },
+
+  loadSnapshot(id) {
+    const snap = loadSnaps().find(s => s.id === id);
+    if (!snap) return false;
+    _data = JSON.parse(JSON.stringify(snap.data));
+    persist(_data);
+    return true;
+  },
+
+  deleteSnapshot(id) {
+    const snaps = loadSnaps().filter(s => s.id !== id);
+    localStorage.setItem(SNAP_KEY, JSON.stringify(snaps));
+  },
+
   // ── Import / Export ─────────────────────────────────
 
   exportJSON() {
@@ -180,5 +264,63 @@ export const store = {
       };
       reader.readAsText(file);
     });
+  },
+
+  // ── Character categories ─────────────────────────────
+
+  getCategories() { return _data.characterCategories || []; },
+
+  createCategory(name, color) {
+    if (!_data.characterCategories) _data.characterCategories = [];
+    const cat = { id: crypto.randomUUID(), name, color };
+    _data.characterCategories.push(cat);
+    persist(_data);
+    return cat;
+  },
+
+  updateCategory(id, fields) {
+    const cat = (_data.characterCategories || []).find(c => c.id === id);
+    if (!cat) return;
+    Object.assign(cat, fields);
+    persist(_data);
+  },
+
+  deleteCategory(id) {
+    _data.characterCategories = (_data.characterCategories || []).filter(c => c.id !== id);
+    for (const e of Object.values(_data.entities))
+      if (e.categoryId === id) delete e.categoryId;
+    persist(_data);
+  },
+
+  // ── Board positions ───────────────────────────────────
+
+  updateBoardPosInMemory(entityId, x, y) {
+    const e = _data.entities[entityId];
+    if (!e) return;
+    if (!e.boardPos) e.boardPos = {};
+    e.boardPos.x = Math.round(x);
+    e.boardPos.y = Math.round(y);
+  },
+
+  commitBoardPositions() { persist(_data); },
+
+  // ── Cloud sync ───────────────────────────────────────
+
+  onPersist(fn) { _persistCallbacks.push(fn); },
+
+  exportData() { return JSON.parse(JSON.stringify(_data)); },
+
+  loadData(data) {
+    if (data.version !== 1 || !data.entities) throw new Error('Unrecognised format');
+    _data = data;
+    localStorage.setItem(LS_KEY, JSON.stringify(_data));
+    // Don't fire callbacks — this is an incoming sync, not a local mutation
+  },
+
+  dataUpdatedAt() {
+    const entities = Object.values(_data.entities);
+    if (!entities.length) return null;
+    return entities.reduce((latest, e) =>
+      (e.updatedAt || '') > latest ? (e.updatedAt || '') : latest, '');
   },
 };

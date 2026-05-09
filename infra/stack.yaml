@@ -21,7 +21,33 @@ Parameters:
     Default: lore.malha.land
     Description: Full domain name for the site
 
+  ApiGatewayDomain:
+    Type: String
+    Default: ''
+    Description: API Gateway domain (e.g. abc123.execute-api.us-east-1.amazonaws.com) — set after backend stack is deployed
+
 Resources:
+
+  # ── CloudFront Function: convert S3 403 (missing key) → 404 ─────────────────
+  # S3 returns 403 for missing keys when public access is blocked.
+  # We map only 404 → index.html for the SPA, so API Gateway 403s pass through.
+  S3ErrorRewrite:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: WritingWorldS3ErrorRewrite
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Rewrite S3 403 to 404 so SPA fallback only catches missing S3 keys
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var response = event.response;
+          if (response.statusCode === 403) {
+            response.statusCode = 404;
+            response.statusDescription = 'Not Found';
+          }
+          return response;
+        }
 
   # ── SSL Certificate ─────────────────────────────────────────────────────────
   Certificate:
@@ -95,8 +121,14 @@ Resources:
           - Id: S3Origin
             DomainName: !GetAtt SiteBucket.RegionalDomainName
             S3OriginConfig:
-              OriginAccessIdentity: ''   # empty = use OAC instead of OAI
+              OriginAccessIdentity: ''
             OriginAccessControlId: !GetAtt OriginAccessControl.Id
+          - Id: ApiOrigin
+            DomainName: !Ref ApiGatewayDomain
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
 
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
@@ -105,13 +137,25 @@ Resources:
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods:  [GET, HEAD]
           Compress: true
+          FunctionAssociations:
+            - EventType: viewer-response
+              FunctionARN: !GetAtt S3ErrorRewrite.FunctionARN
 
-        # SPA fallback: serve index.html for 403/404 (S3 returns 403 for missing keys)
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: https-only
+            # 4135ea2d = CachingDisabled managed policy (no caching for API)
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            AllowedMethods: [DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT]
+            CachedMethods:  [GET, HEAD]
+            Compress: false
+
+        # SPA fallback: only catch 404.
+        # S3 403s (missing keys) are rewritten to 404 by the S3ErrorRewrite function.
+        # API Gateway 401/403 errors are NOT caught here — they pass through cleanly.
         CustomErrorResponses:
-          - ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
           - ErrorCode: 404
             ResponseCode: 200
             ResponsePagePath: /index.html

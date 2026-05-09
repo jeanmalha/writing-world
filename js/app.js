@@ -1,4 +1,8 @@
 import { store, TYPES, TYPE_FIELDS } from './store.js';
+import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail } from './auth.js';
+import { renderAiView } from './ai-panel.js';
+import { loadWorld, saveWorld } from './api.js';
+import { initBoard, renderBoard } from './board.js';
 
 // ── State ──────────────────────────────────────────────
 const state = {
@@ -11,6 +15,7 @@ const state = {
 
 // ── DOM refs ───────────────────────────────────────────
 const $       = id => document.getElementById(id);
+const sidebar       = document.getElementById('sidebar');
 const typeNav      = $('type-nav');
 const listHeader   = $('list-header');
 const entityList   = $('entity-list');
@@ -40,10 +45,44 @@ function renderSidebar() {
     <span class="type-count">${counts.event}</span>
   </button>`;
 
+  const boardActive = state.view === 'board' ? 'active' : '';
+  html += `<button class="type-btn ${boardActive}" id="btn-board">
+    <span class="type-icon" style="color:#60a5fa">&#9635;</span>
+    <span class="type-label">Board</span>
+    <span class="type-count">${counts.character}</span>
+  </button>`;
+
+  if (isAuthEnabled) {
+    const aiActive = state.view === 'ai' ? 'active' : '';
+    html += `<button class="type-btn ${aiActive}" id="btn-ai">
+      <span class="type-icon" style="color:#a78bfa">◈</span>
+      <span class="type-label">AI Extract</span>
+      ${isAuthenticated() ? '' : '<span class="type-lock">🔒</span>'}
+    </button>`;
+  }
+
   typeNav.innerHTML = html;
   typeNav.querySelectorAll('[data-type]').forEach(btn =>
     btn.addEventListener('click', () => selectType(btn.dataset.type)));
   $('btn-timeline')?.addEventListener('click', showTimeline);
+  $('btn-board')?.addEventListener('click', showBoard);
+  $('btn-ai')?.addEventListener('click', showAiPanel);
+}
+
+function updateAuthStatus() {
+  const el = $('auth-status');
+  if (!el || !isAuthEnabled) return;
+  if (isAuthenticated()) {
+    const email = getUserEmail() || 'signed in';
+    el.innerHTML = `<div class="auth-user">
+      <span class="auth-email" title="${esc(email)}">${esc(email)}</span>
+      <button id="btn-signout">Sign Out</button>
+    </div>`;
+    $('btn-signout')?.addEventListener('click', logout);
+  } else {
+    el.innerHTML = `<button id="btn-signin">Sign In</button>`;
+    $('btn-signin')?.addEventListener('click', login);
+  }
 }
 
 // ── List Panel ─────────────────────────────────────────
@@ -126,6 +165,10 @@ function renderDetail() {
     + (inHtml  ? `<div class="links-group"><div class="links-group-label">referenced by</div>${inHtml}</div>` : '')
     : `<div class="field-empty">No relations yet.</div>`;
 
+  const worldStateHtml = state.view === 'timeline' && entity.type === 'event' && entity.date
+    ? buildWorldStateHtml(entity.date)
+    : '';
+
   detailContent.innerHTML = `
     <div class="detail-header">
       <div class="detail-type-badge" style="color:${def.color}">${def.icon}&nbsp;${def.label.slice(0,-1).toUpperCase()}</div>
@@ -144,12 +187,39 @@ function renderDetail() {
       <div class="section-title">Relations</div>
       ${relHtml}
     </div>
-    <div class="detail-meta">Updated ${fmt(entity.updatedAt)} &nbsp;·&nbsp; Created ${fmt(entity.createdAt)}</div>`;
+    <div class="detail-meta">Updated ${fmt(entity.updatedAt)} &nbsp;·&nbsp; Created ${fmt(entity.createdAt)}</div>
+    ${worldStateHtml}`;
 
   $('btn-edit').addEventListener('click', () => { state.editing = true; renderDetail(); });
   $('btn-delete').addEventListener('click', () => handleDelete(entity.id));
   detailContent.querySelectorAll('.link-item').forEach(el =>
     el.addEventListener('click', () => jumpTo(el.dataset.id)));
+  detailContent.querySelectorAll('.ws-item').forEach(el =>
+    el.addEventListener('click', () => jumpTo(el.dataset.id)));
+}
+
+function buildWorldStateHtml(date) {
+  const states = store.worldStateAt(date);
+  const groups = {};
+  for (const { entity: e, note } of states) {
+    if (!groups[e.type]) groups[e.type] = [];
+    groups[e.type].push({ e, note });
+  }
+  const inner = Object.entries(groups).map(([type, items]) => {
+    const def = TYPES[type];
+    return `<div class="ws-group">
+      <div class="ws-group-label" style="color:${def.color}">${def.icon}&nbsp;${def.label.toUpperCase()}</div>
+      ${items.map(({ e, note }) => `
+        <div class="ws-item" data-id="${e.id}">
+          <span class="ws-name">${esc(e.name) || '<unnamed>'}</span>
+          <span class="ws-note">${esc(note.text)}</span>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+  return `<div class="world-state-section">
+    <div class="section-title">World State &middot; ${esc(date)}</div>
+    ${inner || `<div class="field-empty">No entity notes at this date yet.</div>`}
+  </div>`;
 }
 
 // ── Detail: Edit Form ──────────────────────────────────
@@ -216,6 +286,15 @@ function renderEditForm(entity) {
         <textarea name="description" rows="7" placeholder="Notes, backstory, details...">${esc(entity.description)}</textarea>
       </div>
     </form>
+    <div class="timeline-section">
+      <div class="section-title">Timeline</div>
+      <div id="timeline-notes-list"></div>
+      <div class="timeline-note-add-form">
+        <input id="tn-date" type="text" placeholder="Date..." autocomplete="off">
+        <input id="tn-text" type="text" placeholder="Status at this date...">
+        <button id="btn-add-tn" type="button">Add</button>
+      </div>
+    </div>
     <div class="relations-section">
       <div class="section-title">Relations</div>
       <div id="links-list">${linksHtml}</div>
@@ -232,8 +311,23 @@ function renderEditForm(entity) {
   // Auto-focus name field
   detailContent.querySelector('[name="name"]')?.focus();
 
+  renderTimelineNotesList(entity.id);
+
   $('btn-save').addEventListener('click', () => handleSave(entity.id));
   $('btn-cancel').addEventListener('click', () => handleCancel(entity.id, isNew));
+
+  $('btn-add-tn').addEventListener('click', () => {
+    const date = $('tn-date').value.trim();
+    const text = $('tn-text').value.trim();
+    if (!date && !text) return;
+    store.addTimelineNote(entity.id, date, text);
+    renderTimelineNotesList(entity.id);
+    $('tn-date').value = '';
+    $('tn-text').value = '';
+    $('tn-date').focus();
+  });
+  [$('tn-date'), $('tn-text')].forEach(inp =>
+    inp?.addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-add-tn').click(); }));
 
   detailContent.querySelectorAll('.link-label-input').forEach(input =>
     input.addEventListener('change', () =>
@@ -251,6 +345,44 @@ function renderEditForm(entity) {
     store.addLink(entity.id, targetId, $('link-label').value.trim());
     renderEditForm(store.get(entity.id));
   });
+}
+
+// ── Timeline Notes List ─────────────────────────────────
+function renderTimelineNotesList(entityId) {
+  const el = $('timeline-notes-list');
+  if (!el) return;
+  const entity = store.get(entityId);
+  const notes  = entity?.timelineNotes || [];
+
+  if (!notes.length) {
+    el.innerHTML = `<div class="field-empty">No notes yet.</div>`;
+    return;
+  }
+
+  el.innerHTML = notes.map(note => `
+    <div class="timeline-note-row">
+      <input class="tn-date-input" data-id="${note.id}" type="text" value="${esc(note.date)}" placeholder="Date">
+      <input class="tn-text-input" data-id="${note.id}" type="text" value="${esc(note.text)}" placeholder="Status...">
+      <button class="btn-remove-tn" data-id="${note.id}" type="button">&#215;</button>
+    </div>`).join('');
+
+  el.querySelectorAll('.tn-date-input').forEach(inp =>
+    inp.addEventListener('change', () => {
+      const textInp = el.querySelector(`.tn-text-input[data-id="${inp.dataset.id}"]`);
+      store.updateTimelineNote(entityId, inp.dataset.id, inp.value, textInp?.value || '');
+    }));
+
+  el.querySelectorAll('.tn-text-input').forEach(inp =>
+    inp.addEventListener('change', () => {
+      const dateInp = el.querySelector(`.tn-date-input[data-id="${inp.dataset.id}"]`);
+      store.updateTimelineNote(entityId, inp.dataset.id, dateInp?.value || '', inp.value);
+    }));
+
+  el.querySelectorAll('.btn-remove-tn').forEach(btn =>
+    btn.addEventListener('click', () => {
+      store.deleteTimelineNote(entityId, btn.dataset.id);
+      renderTimelineNotesList(entityId);
+    }));
 }
 
 // ── Timeline ────────────────────────────────────────────
@@ -274,9 +406,12 @@ function renderTimeline() {
     return;
   }
 
-  entityList.innerHTML = `<div class="timeline">` + events.map(e => {
+  const cursorIdx = state.selectedId ? events.findIndex(e => e.id === state.selectedId) : -1;
+
+  entityList.innerHTML = `<div class="timeline">` + events.flatMap((e, i) => {
     const imp = (e.importance || 'minor').toLowerCase();
-    return `<div class="timeline-item importance-${imp}${e.id === state.selectedId ? ' selected' : ''}" data-id="${e.id}">
+    const posClass = cursorIdx < 0 ? '' : i < cursorIdx ? ' past' : i === cursorIdx ? ' cursor-event' : ' future';
+    const itemHtml = `<div class="timeline-item importance-${imp}${e.id === state.selectedId ? ' selected' : ''}${posClass}" data-id="${e.id}">
       <div class="timeline-marker"></div>
       <div>
         <div class="timeline-date">${esc(e.date) || '—'}</div>
@@ -284,6 +419,10 @@ function renderTimeline() {
         ${e.description ? `<div class="timeline-desc">${esc(e.description.slice(0, 120))}${e.description.length > 120 ? '…' : ''}</div>` : ''}
       </div>
     </div>`;
+    const cursorLine = i === cursorIdx
+      ? `<div class="timeline-cursor-line"><span>&#9671;&nbsp;${esc(e.date) || '?'}</span></div>`
+      : '';
+    return [itemHtml, cursorLine];
   }).join('') + `</div>`;
 
   entityList.querySelectorAll('.timeline-item').forEach(el =>
@@ -356,6 +495,20 @@ function showTimeline() {
   renderAll();
 }
 
+function showAiPanel() {
+  state.view = 'ai';
+  state.selectedId = null;
+  state.editing = false;
+  renderAll();
+}
+
+function showBoard() {
+  state.view = 'board';
+  state.selectedId = null;
+  state.editing = false;
+  renderAll();
+}
+
 function handleNew() {
   const entity = store.create(state.type);
   state.selectedId = entity.id;
@@ -399,16 +552,90 @@ function handleDelete(id) {
 // ── Full re-render ──────────────────────────────────────
 function renderAll() {
   renderSidebar();
-  if      (state.view === 'timeline') renderTimeline();
-  else if (state.view === 'search')   renderSearch();
-  else                                renderList();
-  renderDetail();
+  const isBoardMode = state.view === 'board';
+  document.body.classList.toggle('board-mode', isBoardMode);
+
+  if (isBoardMode) {
+    renderBoard();
+  } else if (state.view === 'timeline') { renderTimeline(); renderDetail(); }
+  else if   (state.view === 'search')   { renderSearch();   renderDetail(); }
+  else if   (state.view === 'ai')       { renderAiView(listHeader, entityList, detailContent); }
+  else                                  { renderList();     renderDetail(); }
   updateStatus();
+  updateAuthStatus();
 }
+
+let _cloudStatus = ''; // '' | 'saving' | 'synced' | 'error'
 
 function updateStatus() {
   const total = store.totalCount();
-  statusText.textContent = `${total} entr${total !== 1 ? 'ies' : 'y'} · saved`;
+  const base  = `${total} entr${total !== 1 ? 'ies' : 'y'}`;
+  const cloud = _cloudStatus === 'saving' ? ' · syncing…'
+              : _cloudStatus === 'synced' ? ' · cloud ✓'
+              : _cloudStatus === 'error'  ? ' · sync failed'
+              : '';
+  statusText.textContent = base + (cloud || ' · saved');
+}
+
+// ── Cloud sync ──────────────────────────────────────────
+let _cloudSaveTimer = null;
+
+async function initCloudSync() {
+  if (!isAuthenticated()) return;
+
+  // Load cloud world and resolve conflicts
+  try {
+    const cloud = await loadWorld();
+    if (cloud?.data) {
+      const localAt = store.dataUpdatedAt() || '';
+      const cloudAt = cloud.updatedAt || '';
+
+      if (!store.totalCount()) {
+        // Nothing local — take cloud silently
+        store.loadData(cloud.data);
+        renderAll();
+      } else if (cloudAt > localAt) {
+        // Cloud is newer — load it
+        store.loadData(cloud.data);
+        renderAll();
+        showBanner('Loaded your world from cloud.', 4000);
+      } else if (localAt > cloudAt) {
+        // Local is newer — push it up silently
+        await saveWorld(store.exportData());
+        _cloudStatus = 'synced'; updateStatus();
+      }
+      // If equal, do nothing
+    } else if (store.totalCount()) {
+      // No cloud save yet — push local up
+      await saveWorld(store.exportData());
+      _cloudStatus = 'synced'; updateStatus();
+    }
+  } catch (err) {
+    console.warn('Cloud sync init failed:', err);
+  }
+
+  // Auto-save on every local change
+  store.onPersist(() => {
+    _cloudStatus = 'saving'; updateStatus();
+    clearTimeout(_cloudSaveTimer);
+    _cloudSaveTimer = setTimeout(async () => {
+      try {
+        await saveWorld(store.exportData());
+        _cloudStatus = 'synced';
+      } catch {
+        _cloudStatus = 'error';
+      }
+      updateStatus();
+    }, 2000);
+  });
+}
+
+function showBanner(msg, ms = 5000) {
+  const el = $('sync-banner');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), ms);
 }
 
 // ── Utilities ───────────────────────────────────────────
@@ -425,6 +652,78 @@ function fmt(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
+
+// ── Saves Panel ─────────────────────────────────────────
+function openSavesPanel() {
+  sidebar.classList.add('saves-open');
+  $('btn-saves').classList.add('active');
+  const now = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  $('save-name-input').value = now;
+  renderSavesList();
+  $('save-name-input').focus();
+  $('save-name-input').select();
+}
+
+function closeSavesPanel() {
+  sidebar.classList.remove('saves-open');
+  $('btn-saves').classList.remove('active');
+}
+
+function renderSavesList() {
+  const snaps = store.listSnapshots();
+  const el = $('saves-list-inner');
+  if (!snaps.length) {
+    el.innerHTML = `<div class="saves-empty">No saves yet.</div>`;
+    return;
+  }
+  el.innerHTML = snaps.map(s => {
+    const count = Object.keys(s.data.entities || {}).length;
+    const date  = new Date(s.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return `<div class="save-item">
+      <div class="save-name">${esc(s.name)}</div>
+      <div class="save-meta">
+        <span>${count} entr${count !== 1 ? 'ies' : 'y'} · ${date}</span>
+        <div class="save-actions">
+          <button class="save-btn-restore" data-id="${s.id}" title="Restore">&#8629;</button>
+          <button class="save-btn-delete"  data-id="${s.id}" title="Delete">&#215;</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('.save-btn-restore').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const snap = snaps.find(s => s.id === btn.dataset.id);
+      if (!confirm(`Restore "${snap?.name}"?\nCurrent state will be overwritten.`)) return;
+      store.loadSnapshot(btn.dataset.id);
+      state.selectedId = null;
+      state.editing = false;
+      closeSavesPanel();
+      renderAll();
+    }));
+
+  el.querySelectorAll('.save-btn-delete').forEach(btn =>
+    btn.addEventListener('click', () => {
+      store.deleteSnapshot(btn.dataset.id);
+      renderSavesList();
+    }));
+}
+
+$('btn-saves').addEventListener('click', () =>
+  sidebar.classList.contains('saves-open') ? closeSavesPanel() : openSavesPanel());
+
+$('btn-do-save').addEventListener('click', () => {
+  const name = $('save-name-input').value.trim() || new Date().toLocaleString();
+  const ok = store.saveSnapshot(name);
+  if (!ok) { alert('Save failed — localStorage may be full.'); return; }
+  renderSavesList();
+  $('save-name-input').value = '';
+});
+
+$('save-name-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter')  $('btn-do-save').click();
+  if (e.key === 'Escape') closeSavesPanel();
+});
 
 // ── Init ────────────────────────────────────────────────
 $('btn-export').addEventListener('click', () => store.exportJSON());
@@ -453,4 +752,12 @@ searchInput.addEventListener('input', e => {
   }
 });
 
-renderAll();
+async function init() {
+  if (isAuthEnabled && window.location.search.includes('code=')) {
+    await handleCallback().catch(console.error);
+  }
+  initBoard(entityId => jumpTo(entityId));
+  renderAll();
+  await initCloudSync();
+}
+init();

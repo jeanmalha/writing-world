@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Writing World Backend - Cognito + HTTP API + Lambda (Strands) + Bedrock + DynamoDB
+
+Parameters:
+  CognitoDomainPrefix:
+    Type: String
+    Description: Globally-unique prefix for the Cognito hosted-UI domain
+
+  FrontendOrigin:
+    Type: String
+    Default: https://lore.malha.land
+
+  BedrockModel:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
+
+  LambdaBucket:
+    Type: String
+    Description: S3 bucket holding lambda/extract.zip (set by deploy-backend.sh)
+
+Resources:
+
+  # ── Cognito ──────────────────────────────────────────────────────────────────
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: WritingWorldUsers
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: false
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref UserPool
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: WritingWorldWeb
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      SupportedIdentityProviders:
+        - COGNITO
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      CallbackURLs:
+        - !Sub '${FrontendOrigin}/'
+        - 'http://localhost:8080/'
+      LogoutURLs:
+        - !Sub '${FrontendOrigin}/'
+        - 'http://localhost:8080/'
+
+  # ── DynamoDB ─────────────────────────────────────────────────────────────────
+
+  WorldTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: writing-world-data
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: writing-world-jobs
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: jobId
+          KeyType: HASH
+      AttributeDefinitions:
+        - AttributeName: jobId
+          AttributeType: S
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ── IAM Role (shared by both Lambda functions) ───────────────────────────────
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: WritingWorldLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: WritingWorldLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt JobsTable.Arn
+                  - !GetAtt WorldTable.Arn
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:writing-world-*'
+
+  # ── Processor Lambda (Strands agent, async, long timeout) ───────────────────
+
+  ProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: writing-world-processor
+      Runtime: python3.12
+      Handler: index.process
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 600
+      MemorySize: 512
+      Environment:
+        Variables:
+          MODEL: !Ref BedrockModel
+          JOBS_TABLE: !Ref JobsTable
+          WORLD_TABLE: !Ref WorldTable
+          PROCESSOR_ARN: ''
+      Code:
+        S3Bucket: !Ref LambdaBucket
+        S3Key: lambda/extract.zip
+
+  # ── API Lambda (thin handler, returns jobId immediately) ─────────────────────
+
+  ExtractFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: writing-world-extract
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          MODEL: !Ref BedrockModel
+          JOBS_TABLE: !Ref JobsTable
+          WORLD_TABLE: !Ref WorldTable
+          PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
+      Code:
+        S3Bucket: !Ref LambdaBucket
+        S3Key: lambda/extract.zip
+
+  # ── HTTP API ─────────────────────────────────────────────────────────────────
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: writing-world-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref FrontendOrigin
+          - http://localhost:8080
+        AllowMethods:
+          - POST
+          - GET
+          - PUT
+          - OPTIONS
+        AllowHeaders:
+          - authorization
+          - content-type
+        MaxAge: 3600
+
+  JwtAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      Name: CognitoJWT
+      ApiId: !Ref HttpApi
+      AuthorizerType: JWT
+      IdentitySource:
+        - '$request.header.Authorization'
+      JwtConfiguration:
+        Audience:
+          - !Ref UserPoolClient
+        Issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+
+  ExtractIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ExtractFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  GetWorldRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /world
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PutWorldRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: PUT /world
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  ExtractRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /extract
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetExtractRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /extract/{jobId}'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PostAnalyzeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /analyze
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAnalyzeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /analyze/{jobId}'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: api
+      AutoDeploy: true
+
+  ExtractPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ExtractFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*'
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+
+  CognitoDomain:
+    Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
+
+  ApiEndpoint:
+    Value: !Sub '${HttpApi.ApiEndpoint}/api'
