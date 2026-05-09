@@ -18,8 +18,13 @@ export const TYPES = {
 
 export const TYPE_FIELDS = {
   character: [
-    { key: 'role',   label: 'Role',   type: 'text',   placeholder: 'e.g. Pilot, Engineer, Captain' },
-    { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Deceased', 'Unknown', 'Missing'] },
+    { key: 'role',      label: 'Role',       type: 'text',   placeholder: 'e.g. Pilot, Engineer, Captain' },
+    { key: 'status',    label: 'Status',     type: 'select', options: ['Active', 'Deceased', 'Unknown', 'Missing'] },
+    { key: 'gender',    label: 'Gender',     type: 'select', options: ['Female', 'Male', 'Non-binary'] },
+    { key: 'skinTone',  label: 'Skin tone',  type: 'select', options: ['Very fair', 'Fair', 'Light', 'Medium', 'Olive', 'Brown', 'Dark', 'Very dark'] },
+    { key: 'hairStyle', label: 'Hair style', type: 'select', options: ['Bald', 'Cropped', 'Short', 'Medium', 'Long', 'Very long'] },
+    { key: 'hairColor', label: 'Hair color', type: 'select', options: ['Black', 'Dark brown', 'Brown', 'Light brown', 'Blonde', 'Auburn', 'Red', 'Gray', 'White'] },
+    { key: 'eyeColor',  label: 'Eye color',  type: 'select', options: ['Dark brown', 'Brown', 'Hazel', 'Amber', 'Green', 'Blue', 'Light blue', 'Gray'] },
   ],
   location: [
     { key: 'locType', label: 'Type',        type: 'text', placeholder: 'e.g. Planet, Station, Ship, City' },
