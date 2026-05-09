@@ -51,9 +51,48 @@ export const TYPE_FIELDS = {
   ],
 };
 
+// ── Data model helpers ────────────────────────────────────────────────────────
+
+function _emptyProject() {
+  return {
+    metadata:            {},
+    entities:            {},
+    structure:           [],
+    config:              { enabledTypes: ['character', 'location', 'event', 'artifact'] },
+    characterCategories: [],
+  };
+}
+
+function _defaultData() {
+  const id = crypto.randomUUID();
+  return { version: 2, activeProjectId: id, projects: { [id]: _emptyProject() } };
+}
+
+function _migrateV1(old) {
+  const id = crypto.randomUUID();
+  return {
+    version: 2,
+    activeProjectId: id,
+    projects: {
+      [id]: {
+        metadata:            old.project || {},
+        entities:            old.entities || {},
+        structure:           old.structure || [],
+        config:              old.config || { enabledTypes: ['character', 'location', 'event', 'artifact'] },
+        characterCategories: old.characterCategories || [],
+      },
+    },
+  };
+}
+
 function load() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY) || '{"version":1,"entities":{}}'); }
-  catch { return { version: 1, entities: {} }; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+    if (!raw) return _defaultData();
+    if (raw.version === 1) return _migrateV1(raw);
+    if (raw.version === 2) return raw;
+    return _defaultData();
+  } catch { return _defaultData(); }
 }
 
 const _persistCallbacks = [];
@@ -68,30 +107,71 @@ function persist(data) {
 
 let _data = load();
 
+// Active project accessor — always returns the current project's sub-object
+function _proj() {
+  return _data.projects[_data.activeProjectId];
+}
+
 export const store = {
 
-  // ── CRUD ────────────────────────────────────────────
+  // ── Projects ─────────────────────────────────────────
+
+  listProjects() {
+    return Object.entries(_data.projects).map(([id, proj]) => ({
+      id,
+      active:      id === _data.activeProjectId,
+      entityCount: Object.keys(proj.entities || {}).length,
+      ...(proj.metadata || {}),
+    }));
+  },
+
+  getActiveProjectId() { return _data.activeProjectId; },
+
+  createProject(name = 'New Project') {
+    const id = crypto.randomUUID();
+    _data.projects[id] = _emptyProject();
+    if (name) _data.projects[id].metadata.title = name;
+    _data.activeProjectId = id;
+    persist(_data);
+    return id;
+  },
+
+  switchProject(id) {
+    if (!_data.projects[id]) return false;
+    _data.activeProjectId = id;
+    persist(_data);
+    return true;
+  },
+
+  deleteProject(id) {
+    if (Object.keys(_data.projects).length <= 1) return false;
+    delete _data.projects[id];
+    if (_data.activeProjectId === id)
+      _data.activeProjectId = Object.keys(_data.projects)[0];
+    persist(_data);
+    return true;
+  },
+
+  // ── CRUD ─────────────────────────────────────────────
 
   getAll(type) {
-    const all = Object.values(_data.entities);
+    const all = Object.values(_proj().entities);
     return type ? all.filter(e => e.type === type) : all;
   },
 
-  get(id) {
-    return _data.entities[id] ?? null;
-  },
+  get(id) { return _proj().entities[id] ?? null; },
 
   create(type) {
-    const id   = crypto.randomUUID();
-    const now  = new Date().toISOString();
+    const id    = crypto.randomUUID();
+    const now   = new Date().toISOString();
     const entity = { id, type, name: '', description: '', tags: [], links: [], timelineNotes: [], createdAt: now, updatedAt: now };
-    _data.entities[id] = entity;
+    _proj().entities[id] = entity;
     persist(_data);
     return entity;
   },
 
   update(id, fields) {
-    const e = _data.entities[id];
+    const e = _proj().entities[id];
     if (!e) return null;
     Object.assign(e, fields, { updatedAt: new Date().toISOString() });
     persist(_data);
@@ -99,16 +179,17 @@ export const store = {
   },
 
   delete(id) {
-    for (const e of Object.values(_data.entities))
+    const entities = _proj().entities;
+    for (const e of Object.values(entities))
       e.links = e.links.filter(l => l.targetId !== id);
-    delete _data.entities[id];
+    delete entities[id];
     persist(_data);
   },
 
-  // ── Links ───────────────────────────────────────────
+  // ── Links ─────────────────────────────────────────────
 
   addLink(entityId, targetId, label) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e) return;
     e.links.push({ targetId, label: label || '' });
     e.updatedAt = new Date().toISOString();
@@ -116,7 +197,7 @@ export const store = {
   },
 
   removeLink(entityId, index) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e) return;
     e.links.splice(index, 1);
     e.updatedAt = new Date().toISOString();
@@ -124,7 +205,7 @@ export const store = {
   },
 
   updateLinkLabel(entityId, index, label) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e || !e.links[index]) return;
     e.links[index].label = label;
     e.updatedAt = new Date().toISOString();
@@ -133,16 +214,16 @@ export const store = {
 
   incomingLinks(id) {
     const result = [];
-    for (const e of Object.values(_data.entities))
+    for (const e of Object.values(_proj().entities))
       for (const link of e.links)
         if (link.targetId === id) result.push({ source: e, label: link.label });
     return result;
   },
 
-  // ── Timeline Notes ──────────────────────────────────
+  // ── Timeline Notes ────────────────────────────────────
 
   addTimelineNote(entityId, date, text) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e) return null;
     if (!e.timelineNotes) e.timelineNotes = [];
     const note = { id: crypto.randomUUID(), date, text };
@@ -154,19 +235,18 @@ export const store = {
   },
 
   updateTimelineNote(entityId, noteId, date, text) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e || !e.timelineNotes) return;
     const note = e.timelineNotes.find(n => n.id === noteId);
     if (!note) return;
-    note.date = date;
-    note.text = text;
+    note.date = date; note.text = text;
     e.timelineNotes.sort((a, b) => a.date.localeCompare(b.date));
     e.updatedAt = new Date().toISOString();
     persist(_data);
   },
 
   deleteTimelineNote(entityId, noteId) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e || !e.timelineNotes) return;
     e.timelineNotes = e.timelineNotes.filter(n => n.id !== noteId);
     e.updatedAt = new Date().toISOString();
@@ -176,7 +256,7 @@ export const store = {
   worldStateAt(date) {
     if (!date) return [];
     const result = [];
-    for (const e of Object.values(_data.entities)) {
+    for (const e of Object.values(_proj().entities)) {
       const notes = (e.timelineNotes || [])
         .filter(n => n.date && n.date.localeCompare(date) <= 0)
         .sort((a, b) => b.date.localeCompare(a.date));
@@ -187,12 +267,12 @@ export const store = {
     return result;
   },
 
-  // ── Queries ─────────────────────────────────────────
+  // ── Queries ───────────────────────────────────────────
 
   search(query) {
     const q = query.toLowerCase().trim();
     if (!q) return [];
-    return Object.values(_data.entities).filter(e =>
+    return Object.values(_proj().entities).filter(e =>
       e.name.toLowerCase().includes(q) ||
       (e.description || '').toLowerCase().includes(q) ||
       (e.tags || []).some(t => t.toLowerCase().includes(q))
@@ -200,25 +280,24 @@ export const store = {
   },
 
   timeline() {
-    return Object.values(_data.entities)
+    return Object.values(_proj().entities)
       .filter(e => e.type === 'event')
       .sort((a, b) => {
-        const da = (a.date || '').trim();
-        const db = (b.date || '').trim();
+        const da = (a.date || '').trim(), db = (b.date || '').trim();
         return da !== db ? da.localeCompare(db) : a.name.localeCompare(b.name);
       });
   },
 
   countByType() {
     const counts = Object.fromEntries(Object.keys(TYPES).map(t => [t, 0]));
-    for (const e of Object.values(_data.entities))
+    for (const e of Object.values(_proj().entities))
       if (counts[e.type] !== undefined) counts[e.type]++;
     return counts;
   },
 
-  totalCount() { return Object.keys(_data.entities).length; },
+  totalCount() { return Object.keys(_proj().entities).length; },
 
-  // ── Snapshots ────────────────────────────────────────
+  // ── Snapshots ─────────────────────────────────────────
 
   saveSnapshot(name) {
     const snaps = loadSnaps();
@@ -233,7 +312,8 @@ export const store = {
   loadSnapshot(id) {
     const snap = loadSnaps().find(s => s.id === id);
     if (!snap) return false;
-    _data = JSON.parse(JSON.stringify(snap.data));
+    const snapData = JSON.parse(JSON.stringify(snap.data));
+    _data = snapData.version === 2 ? snapData : _migrateV1(snapData);
     persist(_data);
     return true;
   },
@@ -243,14 +323,25 @@ export const store = {
     localStorage.setItem(SNAP_KEY, JSON.stringify(snaps));
   },
 
-  // ── Import / Export ─────────────────────────────────
+  // ── Import / Export ───────────────────────────────────
 
   exportJSON() {
-    const blob = new Blob([JSON.stringify(_data, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
+    // Export active project in v1-compatible format
+    const proj = _proj();
+    const out = {
+      version:             1,
+      entities:            proj.entities,
+      project:             proj.metadata,
+      structure:           proj.structure,
+      config:              proj.config,
+      characterCategories: proj.characterCategories,
+    };
+    const title = (proj.metadata?.title || 'project').replace(/[^a-z0-9]/gi, '-').toLowerCase();
+    const blob  = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
     a.href = url;
-    a.download = `writing-world-${new Date().toISOString().slice(0,10)}.json`;
+    a.download = `writing-world-${title}-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   },
@@ -261,8 +352,23 @@ export const store = {
       reader.onload = ev => {
         try {
           const data = JSON.parse(ev.target.result);
-          if (data.version !== 1 || !data.entities) throw new Error('Unrecognised format');
-          _data = data;
+          if (data.version === 1) {
+            // Import as a new project
+            const id = crypto.randomUUID();
+            _data.projects[id] = {
+              metadata:            data.project || {},
+              entities:            data.entities || {},
+              structure:           data.structure || [],
+              config:              data.config || { enabledTypes: ['character', 'location', 'event', 'artifact'] },
+              characterCategories: data.characterCategories || [],
+            };
+            _data.activeProjectId = id;
+          } else if (data.version === 2) {
+            Object.assign(_data.projects, data.projects);
+            _data.activeProjectId = data.activeProjectId;
+          } else {
+            throw new Error('Unrecognised format');
+          }
           persist(_data);
           resolve();
         } catch (err) { reject(err); }
@@ -271,42 +377,42 @@ export const store = {
     });
   },
 
-  // ── Project metadata ─────────────────────────────────
+  // ── Project metadata ──────────────────────────────────
 
-  getProject() { return _data.project || {}; },
+  getProject() { return _proj().metadata || {}; },
 
   updateProject(fields) {
-    if (!_data.project) _data.project = {};
-    Object.assign(_data.project, fields, { updatedAt: new Date().toISOString() });
+    if (!_proj().metadata) _proj().metadata = {};
+    Object.assign(_proj().metadata, fields, { updatedAt: new Date().toISOString() });
     persist(_data);
   },
 
   // ── Acts & chapters ───────────────────────────────────
 
-  getStructure() { return _data.structure || []; },
+  getStructure() { return _proj().structure || []; },
 
   addAct(title = 'New Act') {
-    if (!_data.structure) _data.structure = [];
+    if (!_proj().structure) _proj().structure = [];
     const act = { id: crypto.randomUUID(), title, description: '', chapters: [] };
-    _data.structure.push(act);
+    _proj().structure.push(act);
     persist(_data);
     return act;
   },
 
   updateAct(actId, fields) {
-    const act = (_data.structure || []).find(a => a.id === actId);
+    const act = (_proj().structure || []).find(a => a.id === actId);
     if (!act) return;
     Object.assign(act, fields);
     persist(_data);
   },
 
   deleteAct(actId) {
-    _data.structure = (_data.structure || []).filter(a => a.id !== actId);
+    _proj().structure = (_proj().structure || []).filter(a => a.id !== actId);
     persist(_data);
   },
 
   addChapter(actId, title = 'New Chapter') {
-    const act = (_data.structure || []).find(a => a.id === actId);
+    const act = (_proj().structure || []).find(a => a.id === actId);
     if (!act) return null;
     const ch = { id: crypto.randomUUID(), title, description: '', notes: '' };
     act.chapters.push(ch);
@@ -315,7 +421,7 @@ export const store = {
   },
 
   updateChapter(actId, chapterId, fields) {
-    const act = (_data.structure || []).find(a => a.id === actId);
+    const act = (_proj().structure || []).find(a => a.id === actId);
     const ch  = act?.chapters?.find(c => c.id === chapterId);
     if (!ch) return;
     Object.assign(ch, fields);
@@ -323,7 +429,7 @@ export const store = {
   },
 
   deleteChapter(actId, chapterId) {
-    const act = (_data.structure || []).find(a => a.id === actId);
+    const act = (_proj().structure || []).find(a => a.id === actId);
     if (!act) return;
     act.chapters = act.chapters.filter(c => c.id !== chapterId);
     persist(_data);
@@ -332,36 +438,36 @@ export const store = {
   // ── Configuration ─────────────────────────────────────
 
   getConfig() {
-    return _data.config || { enabledTypes: ['character','location','event','artifact'] };
+    return _proj().config || { enabledTypes: ['character', 'location', 'event', 'artifact'] };
   },
 
   updateConfig(fields) {
-    _data.config = { ...(this.getConfig()), ...fields };
+    _proj().config = { ...(this.getConfig()), ...fields };
     persist(_data);
   },
 
-  // ── Character categories ─────────────────────────────
+  // ── Character categories ──────────────────────────────
 
-  getCategories() { return _data.characterCategories || []; },
+  getCategories() { return _proj().characterCategories || []; },
 
   createCategory(name, color) {
-    if (!_data.characterCategories) _data.characterCategories = [];
+    if (!_proj().characterCategories) _proj().characterCategories = [];
     const cat = { id: crypto.randomUUID(), name, color };
-    _data.characterCategories.push(cat);
+    _proj().characterCategories.push(cat);
     persist(_data);
     return cat;
   },
 
   updateCategory(id, fields) {
-    const cat = (_data.characterCategories || []).find(c => c.id === id);
+    const cat = (_proj().characterCategories || []).find(c => c.id === id);
     if (!cat) return;
     Object.assign(cat, fields);
     persist(_data);
   },
 
   deleteCategory(id) {
-    _data.characterCategories = (_data.characterCategories || []).filter(c => c.id !== id);
-    for (const e of Object.values(_data.entities))
+    _proj().characterCategories = (_proj().characterCategories || []).filter(c => c.id !== id);
+    for (const e of Object.values(_proj().entities))
       if (e.categoryId === id) delete e.categoryId;
     persist(_data);
   },
@@ -369,7 +475,7 @@ export const store = {
   // ── Board positions ───────────────────────────────────
 
   updateBoardPosInMemory(entityId, x, y) {
-    const e = _data.entities[entityId];
+    const e = _proj().entities[entityId];
     if (!e) return;
     if (!e.boardPos) e.boardPos = {};
     e.boardPos.x = Math.round(x);
@@ -378,23 +484,25 @@ export const store = {
 
   commitBoardPositions() { persist(_data); },
 
-  // ── Cloud sync ───────────────────────────────────────
+  // ── Cloud sync ────────────────────────────────────────
 
   onPersist(fn) { _persistCallbacks.push(fn); },
 
   exportData() { return JSON.parse(JSON.stringify(_data)); },
 
   loadData(data) {
-    if (data.version !== 1 || !data.entities) throw new Error('Unrecognised format');
-    _data = data;
+    if (!data.version) throw new Error('Unrecognised format');
+    _data = data.version === 2 ? data : _migrateV1(data);
     localStorage.setItem(LS_KEY, JSON.stringify(_data));
     // Don't fire callbacks — this is an incoming sync, not a local mutation
   },
 
   dataUpdatedAt() {
-    const entities = Object.values(_data.entities);
-    if (!entities.length) return null;
-    return entities.reduce((latest, e) =>
-      (e.updatedAt || '') > latest ? (e.updatedAt || '') : latest, '');
+    // Check across all projects for the most recent entity update
+    let latest = '';
+    for (const proj of Object.values(_data.projects || {}))
+      for (const e of Object.values(proj.entities || {}))
+        if ((e.updatedAt || '') > latest) latest = e.updatedAt;
+    return latest || null;
   },
 };

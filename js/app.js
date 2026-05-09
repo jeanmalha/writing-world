@@ -33,9 +33,11 @@ function renderSidebar() {
   let html = '';
 
   const projActive = state.view === 'project' ? 'active' : '';
+  const projCount  = store.listProjects().length;
   html += `<button class="type-btn ${projActive}" id="btn-project">
     <span class="type-icon" style="color:var(--accent)">◈</span>
     <span class="type-label">${esc(proj.title) || 'Project'}</span>
+    ${projCount > 1 ? `<span class="type-count">${projCount}</span>` : ''}
   </button>`;
 
   html += `<div class="nav-divider"></div>`;
@@ -604,7 +606,7 @@ function renderAll() {
   } else if (state.view === 'timeline')  { renderTimeline(); renderDetail(); }
   else if   (state.view === 'search')    { renderSearch();   renderDetail(); }
   else if   (state.view === 'ai')        { renderAiView(listHeader, entityList, detailContent); }
-  else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderSidebar); }
+  else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderSidebar, renderAll); }
   else if   (state.view === 'settings')  { renderSettingsView(listHeader, entityList, detailContent, renderSidebar); }
   else                                   { renderList();     renderDetail(); }
   updateStatus();

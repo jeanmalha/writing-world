@@ -1522,6 +1522,9 @@ body.board-mode #board-panel {
 }
 
 /* ── Settings ──────────────────────────────────────── */
+.proj-active-dot { color: var(--accent); font-size: 10px; }
+.proj-structure  { margin-top: 4px; }
+
 .settings-section { padding: 8px 12px; }
 
 .settings-section-label {
