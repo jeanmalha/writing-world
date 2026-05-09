@@ -53,6 +53,21 @@ export const TYPE_FIELDS = {
 
 // ── Data model helpers ────────────────────────────────────────────────────────
 
+// Natural (numeric-aware) string compare — handles "Year 2400, Day 3" correctly.
+function _naturalCmp(a, b) {
+  const re = /(\d+)|(\D+)/g;
+  const ta  = String(a).match(re) || [];
+  const tb  = String(b).match(re) || [];
+  for (let i = 0; i < Math.max(ta.length, tb.length); i++) {
+    if (i >= ta.length) return -1;
+    if (i >= tb.length) return  1;
+    const na = parseInt(ta[i], 10), nb = parseInt(tb[i], 10);
+    if (!isNaN(na) && !isNaN(nb)) { if (na !== nb) return na - nb; }
+    else { const c = ta[i].localeCompare(tb[i]); if (c !== 0) return c; }
+  }
+  return 0;
+}
+
 function _emptyProject() {
   return {
     metadata:            {},
@@ -228,7 +243,7 @@ export const store = {
     if (!e.timelineNotes) e.timelineNotes = [];
     const note = { id: crypto.randomUUID(), date, text };
     e.timelineNotes.push(note);
-    e.timelineNotes.sort((a, b) => a.date.localeCompare(b.date));
+    e.timelineNotes.sort((a, b) => _naturalCmp(a.date, b.date));
     e.updatedAt = new Date().toISOString();
     persist(_data);
     return note;
@@ -240,7 +255,7 @@ export const store = {
     const note = e.timelineNotes.find(n => n.id === noteId);
     if (!note) return;
     note.date = date; note.text = text;
-    e.timelineNotes.sort((a, b) => a.date.localeCompare(b.date));
+    e.timelineNotes.sort((a, b) => _naturalCmp(a.date, b.date));
     e.updatedAt = new Date().toISOString();
     persist(_data);
   },
@@ -258,8 +273,8 @@ export const store = {
     const result = [];
     for (const e of Object.values(_proj().entities)) {
       const notes = (e.timelineNotes || [])
-        .filter(n => n.date && n.date.localeCompare(date) <= 0)
-        .sort((a, b) => b.date.localeCompare(a.date));
+        .filter(n => n.date && _naturalCmp(n.date, date) <= 0)
+        .sort((a, b) => _naturalCmp(b.date, a.date));
       if (notes.length) result.push({ entity: e, note: notes[0] });
     }
     result.sort((a, b) =>
@@ -284,7 +299,8 @@ export const store = {
       .filter(e => e.type === 'event')
       .sort((a, b) => {
         const da = (a.date || '').trim(), db = (b.date || '').trim();
-        return da !== db ? da.localeCompare(db) : a.name.localeCompare(b.name);
+        const dc = _naturalCmp(da, db);
+        return dc !== 0 ? dc : a.name.localeCompare(b.name);
       });
   },
 
