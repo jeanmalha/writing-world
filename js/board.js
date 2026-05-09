@@ -136,7 +136,7 @@ function renderCards() {
 
   canvas.querySelectorAll('.board-card').forEach(el => {
     el.addEventListener('mousedown', e => onMouseDown(e, el.dataset.id));
-    el.addEventListener('dblclick',  e => { e.stopPropagation(); openModal(el.dataset.id); });
+    el.addEventListener('dblclick',  e => { e.stopPropagation(); _onNavigate?.(el.dataset.id); });
   });
 
   // Category assign button on each card

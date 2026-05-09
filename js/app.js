@@ -1,6 +1,7 @@
 import { store, TYPES, TYPE_FIELDS } from './store.js';
 import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail } from './auth.js';
 import { renderAiView } from './ai-panel.js';
+import { renderProjectView, renderSettingsView } from './project.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
 
@@ -25,10 +26,22 @@ const statusText   = $('status-text');
 
 // ── Sidebar ────────────────────────────────────────────
 function renderSidebar() {
-  const counts = store.countByType();
+  const counts   = store.countByType();
+  const config   = store.getConfig();
+  const enabled  = new Set(config.enabledTypes || []);
+  const proj     = store.getProject();
   let html = '';
 
+  const projActive = state.view === 'project' ? 'active' : '';
+  html += `<button class="type-btn ${projActive}" id="btn-project">
+    <span class="type-icon" style="color:var(--accent)">◈</span>
+    <span class="type-label">${esc(proj.title) || 'Project'}</span>
+  </button>`;
+
+  html += `<div class="nav-divider"></div>`;
+
   for (const [type, def] of Object.entries(TYPES)) {
+    if (!enabled.has(type)) continue;
     const active = state.view === 'list' && state.type === type ? 'active' : '';
     html += `<button class="type-btn ${active}" data-type="${type}">
       <span class="type-icon" style="color:${def.color}">${def.icon}</span>
@@ -61,12 +74,21 @@ function renderSidebar() {
     </button>`;
   }
 
+  html += `<div class="nav-divider"></div>`;
+  const settingsActive = state.view === 'settings' ? 'active' : '';
+  html += `<button class="type-btn ${settingsActive}" id="btn-settings">
+    <span class="type-icon" style="color:var(--text-muted)">⚙</span>
+    <span class="type-label">Settings</span>
+  </button>`;
+
   typeNav.innerHTML = html;
   typeNav.querySelectorAll('[data-type]').forEach(btn =>
     btn.addEventListener('click', () => selectType(btn.dataset.type)));
+  $('btn-project')?.addEventListener('click', showProject);
   $('btn-timeline')?.addEventListener('click', showTimeline);
   $('btn-board')?.addEventListener('click', showBoard);
   $('btn-ai')?.addEventListener('click', showAiPanel);
+  $('btn-settings')?.addEventListener('click', showSettings);
 }
 
 function updateAuthStatus() {
@@ -509,6 +531,20 @@ function showBoard() {
   renderAll();
 }
 
+function showProject() {
+  state.view = 'project';
+  state.selectedId = null;
+  state.editing = false;
+  renderAll();
+}
+
+function showSettings() {
+  state.view = 'settings';
+  state.selectedId = null;
+  state.editing = false;
+  renderAll();
+}
+
 function handleNew() {
   const entity = store.create(state.type);
   state.selectedId = entity.id;
@@ -551,16 +587,26 @@ function handleDelete(id) {
 
 // ── Full re-render ──────────────────────────────────────
 function renderAll() {
+  // If in list mode with a now-disabled type, fall back to first enabled
+  if (state.view === 'list') {
+    const enabledTypes = store.getConfig().enabledTypes || [];
+    if (!enabledTypes.includes(state.type) && enabledTypes.length) {
+      state.type = enabledTypes[0];
+    }
+  }
+
   renderSidebar();
   const isBoardMode = state.view === 'board';
   document.body.classList.toggle('board-mode', isBoardMode);
 
   if (isBoardMode) {
     renderBoard();
-  } else if (state.view === 'timeline') { renderTimeline(); renderDetail(); }
-  else if   (state.view === 'search')   { renderSearch();   renderDetail(); }
-  else if   (state.view === 'ai')       { renderAiView(listHeader, entityList, detailContent); }
-  else                                  { renderList();     renderDetail(); }
+  } else if (state.view === 'timeline')  { renderTimeline(); renderDetail(); }
+  else if   (state.view === 'search')    { renderSearch();   renderDetail(); }
+  else if   (state.view === 'ai')        { renderAiView(listHeader, entityList, detailContent); }
+  else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderSidebar); }
+  else if   (state.view === 'settings')  { renderSettingsView(listHeader, entityList, detailContent, renderSidebar); }
+  else                                   { renderList();     renderDetail(); }
   updateStatus();
   updateAuthStatus();
 }
@@ -756,7 +802,17 @@ async function init() {
   if (isAuthEnabled && window.location.search.includes('code=')) {
     await handleCallback().catch(console.error);
   }
-  initBoard(entityId => jumpTo(entityId));
+  initBoard(entityId => {
+    const e = store.get(entityId);
+    if (!e) return;
+    state.view      = 'list';
+    state.type      = e.type;
+    state.selectedId = entityId;
+    state.editing   = true;
+    searchInput.value = '';
+    state.query = '';
+    renderAll();
+  });
   renderAll();
   await initCloudSync();
 }

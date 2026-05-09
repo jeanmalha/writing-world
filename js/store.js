@@ -271,6 +271,75 @@ export const store = {
     });
   },
 
+  // ── Project metadata ─────────────────────────────────
+
+  getProject() { return _data.project || {}; },
+
+  updateProject(fields) {
+    if (!_data.project) _data.project = {};
+    Object.assign(_data.project, fields, { updatedAt: new Date().toISOString() });
+    persist(_data);
+  },
+
+  // ── Acts & chapters ───────────────────────────────────
+
+  getStructure() { return _data.structure || []; },
+
+  addAct(title = 'New Act') {
+    if (!_data.structure) _data.structure = [];
+    const act = { id: crypto.randomUUID(), title, description: '', chapters: [] };
+    _data.structure.push(act);
+    persist(_data);
+    return act;
+  },
+
+  updateAct(actId, fields) {
+    const act = (_data.structure || []).find(a => a.id === actId);
+    if (!act) return;
+    Object.assign(act, fields);
+    persist(_data);
+  },
+
+  deleteAct(actId) {
+    _data.structure = (_data.structure || []).filter(a => a.id !== actId);
+    persist(_data);
+  },
+
+  addChapter(actId, title = 'New Chapter') {
+    const act = (_data.structure || []).find(a => a.id === actId);
+    if (!act) return null;
+    const ch = { id: crypto.randomUUID(), title, description: '', notes: '' };
+    act.chapters.push(ch);
+    persist(_data);
+    return ch;
+  },
+
+  updateChapter(actId, chapterId, fields) {
+    const act = (_data.structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    if (!ch) return;
+    Object.assign(ch, fields);
+    persist(_data);
+  },
+
+  deleteChapter(actId, chapterId) {
+    const act = (_data.structure || []).find(a => a.id === actId);
+    if (!act) return;
+    act.chapters = act.chapters.filter(c => c.id !== chapterId);
+    persist(_data);
+  },
+
+  // ── Configuration ─────────────────────────────────────
+
+  getConfig() {
+    return _data.config || { enabledTypes: ['character','location','event','artifact'] };
+  },
+
+  updateConfig(fields) {
+    _data.config = { ...(this.getConfig()), ...fields };
+    persist(_data);
+  },
+
   // ── Character categories ─────────────────────────────
 
   getCategories() { return _data.characterCategories || []; },

@@ -1367,6 +1367,96 @@ body.board-mode #board-panel {
 .bm-link em { color: var(--text-muted); font-style: italic; }
 .bm-meta   { color: var(--text-muted); font-size: 10px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
 
+/* ── Project Structure ─────────────────────────────── */
+.act-item { border-bottom: 1px solid rgba(31,41,55,0.5); }
+
+.act-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 12px;
+  background: rgba(255,255,255,0.025);
+}
+
+.act-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.act-btns {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.act-header:hover .act-btns,
+.chapter-item:hover .act-btns { opacity: 1; }
+
+.act-btn {
+  padding: 1px 5px;
+  background: none;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.act-btn:hover         { border-color: var(--accent); color: var(--accent); }
+.act-btn-del:hover,
+.ch-btn-del:hover      { border-color: var(--danger); color: var(--danger); }
+
+.chapter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 24px;
+  border-top: 1px solid rgba(31,41,55,0.3);
+}
+.ch-num { color: var(--text-muted); font-size: 10px; flex-shrink: 0; }
+.ch-title {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Settings ──────────────────────────────────────── */
+.settings-section { padding: 8px 12px; }
+
+.settings-section-label {
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(31,41,55,0.4);
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: color 0.1s;
+}
+.settings-check:hover { color: var(--text); }
+.settings-check input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.settings-check .type-icon { font-size: 13px; width: 16px; text-align: center; flex-shrink: 0; }
+
 /* ── Scrollbars ────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
