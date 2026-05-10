@@ -1,7 +1,7 @@
 import { AUTH_CONFIG } from './config.js';
 
 const SEEN_KEY = 'lore_splash_seen';
-const GITHUB_URL = 'https://github.com/jmalha/lore';   // update when repo is public
+const GITHUB_URL = 'https://github.com/jeanmalha/writing-world.git';
 
 export function initSplash() {
   if (localStorage.getItem(SEEN_KEY)) return;
