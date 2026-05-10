@@ -5,7 +5,6 @@ import { startExtraction, startAnalysis, startPdfExtraction, pollJob } from './a
 // Module state — persists while AI view is active
 let _mode    = 'extract';   // 'extract' | 'analyze'
 let _source  = 'text';      // 'text' | 'pdf'
-let _model   = 'simple';    // 'simple'  | 'complex'
 let _text    = '';
 let _results = null;
 let _status  = '';
@@ -30,10 +29,6 @@ async function getPdfjsLib() {
   return lib;
 }
 
-const MODEL_LABEL = {
-  simple:  { name: 'Simple',  hint: 'Fast · GPT OSS 20B' },
-  complex: { name: 'Complex', hint: 'Thorough · Claude Sonnet' },
-};
 
 function esc(s) {
   return String(s || '')
@@ -82,14 +77,6 @@ function renderAiList(listHeader, entityList, detailContent) {
     if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
   });
 
-  entityList.querySelectorAll('.ai-model-btn').forEach(btn =>
-    btn.addEventListener('click', () => {
-      if (_model !== btn.dataset.model) {
-        _model = btn.dataset.model;
-        rerender(listHeader, entityList, detailContent);
-      }
-    }));
-
   const ta  = document.getElementById('ai-textarea');
   const btn = document.getElementById('btn-ai-run');
 
@@ -130,16 +117,6 @@ function renderAiList(listHeader, entityList, detailContent) {
   });
 }
 
-function modelToggleHtml() {
-  return `<div class="ai-model-toggle">
-    ${['simple', 'complex'].map(m => `
-      <button class="ai-model-btn${_model === m ? ' active' : ''}" data-model="${m}">
-        <span class="ai-model-name">${MODEL_LABEL[m].name}</span>
-        <span class="ai-model-hint">${MODEL_LABEL[m].hint}</span>
-      </button>`).join('')}
-  </div>`;
-}
-
 function renderExtractInput() {
   const srcText = _source === 'text';
   return `<div class="ai-input-area">
@@ -147,7 +124,6 @@ function renderExtractInput() {
       <button class="ai-src-btn${srcText ? ' active' : ''}" id="btn-src-text">Text</button>
       <button class="ai-src-btn${!srcText ? ' active' : ''}" id="btn-src-pdf">PDF</button>
     </div>
-    ${modelToggleHtml()}
     ${srcText ? `
       <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The model will extract and match against your existing entities.">${esc(_text)}</textarea>
     ` : renderPdfInput()}
@@ -188,7 +164,6 @@ function renderPdfInput() {
 function renderAnalyzeInput() {
   const count = store.totalCount();
   return `<div class="ai-input-area">
-    ${modelToggleHtml()}
     <div class="ai-analyze-desc">
       Analyzes your <strong>${count}</strong> existing entr${count !== 1 ? 'ies' : 'y'} and suggests missing links and potential duplicates.
     </div>
@@ -253,7 +228,7 @@ async function runExtract(listHeader, entityList, detailContent) {
     ...(e.date     ? { date:    e.date    } : {}),
   }));
 
-  await runJob(() => startExtraction(_text, existingEntities, _model), 'extract',
+  await runJob(() => startExtraction(_text, existingEntities), 'extract',
                listHeader, entityList, detailContent);
 }
 
@@ -266,7 +241,7 @@ async function runPdfExtract(listHeader, entityList, detailContent) {
     ...(e.locType ? { locType: e.locType } : {}),
   }));
 
-  await runJob(() => startPdfExtraction(_pdfPages, existingEntities, _model),
+  await runJob(() => startPdfExtraction(_pdfPages, existingEntities),
                'extract-pdf', listHeader, entityList, detailContent);
 }
 
@@ -284,7 +259,7 @@ async function runAnalyze(listHeader, entityList, detailContent) {
   }));
 
   if (!entities.length) return;
-  await runJob(() => startAnalysis(entities, _model), 'analyze',
+  await runJob(() => startAnalysis(entities), 'analyze',
                listHeader, entityList, detailContent);
 }
 

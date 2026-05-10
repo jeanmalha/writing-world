@@ -24,20 +24,6 @@ Parameters:
     Type: String
     Description: S3 bucket holding lambda/extract.zip (set by deploy-backend.sh)
 
-  DailyTokenLimit:
-    Type: Number
-    Default: 0
-    Description: Max tokens per user per day (0 = unlimited)
-
-  WeeklyTokenLimit:
-    Type: Number
-    Default: 0
-    Description: Max tokens per user per week (0 = unlimited)
-
-  MonthlyTokenLimit:
-    Type: Number
-    Default: 0
-    Description: Max tokens per user per month (0 = unlimited)
 
 Resources:
 
@@ -53,6 +39,14 @@ Resources:
         - email
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailSubject: "You've been invited to Lore"
+          EmailMessage: |
+            <p>Hello,</p>
+            <p>You have been invited to <strong>Lore</strong>, a knowledge management tool for writers.</p>
+            <p>Your temporary password is: <strong>{####}</strong></p>
+            <p>Sign in at <a href="https://lore.malha.land">lore.malha.land</a> and you will be prompted to set a new password on first login.</p>
+            <p>— The Lore team</p>
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -162,7 +156,19 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
-  # ── Cognito admin group ───────────────────────────────────────────────────────
+  UsageTiersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: writing-world-tiers
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: tierId
+          KeyType: HASH
+      AttributeDefinitions:
+        - AttributeName: tierId
+          AttributeType: S
+
+  # ── Cognito groups ────────────────────────────────────────────────────────────
 
   AdminsGroup:
     Type: AWS::Cognito::UserPoolGroup
@@ -170,6 +176,27 @@ Resources:
       GroupName: admins
       UserPoolId: !Ref UserPool
       Description: Platform administrators
+
+  ExplorerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: explorer
+      UserPoolId: !Ref UserPool
+      Description: Explorer tier — basic model, entry-level limits
+
+  TrailblazerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: trailblazer
+      UserPoolId: !Ref UserPool
+      Description: Trailblazer tier — complex model, generous limits
+
+  UnchartedGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: uncharted
+      UserPoolId: !Ref UserPool
+      Description: Uncharted tier — complex model, unlimited
 
   # ── IAM Role (shared by both Lambda functions) ───────────────────────────────
 
@@ -220,6 +247,12 @@ Resources:
                 Resource: !GetAtt UsageTable.Arn
               - Effect: Allow
                 Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                Resource: !GetAtt UsageTiersTable.Arn
+              - Effect: Allow
+                Action:
                   - cognito-idp:ListUsers
                   - cognito-idp:AdminCreateUser
                   - cognito-idp:AdminGetUser
@@ -263,10 +296,8 @@ Resources:
           INTEREST_BUCKET: !Ref InterestBucket
           PROCESSOR_ARN: ''
           USAGE_TABLE: !Ref UsageTable
+          TIERS_TABLE: !Ref UsageTiersTable
           USER_POOL_ID: !Ref UserPool
-          DAILY_TOKEN_LIMIT: !Ref DailyTokenLimit
-          WEEKLY_TOKEN_LIMIT: !Ref WeeklyTokenLimit
-          MONTHLY_TOKEN_LIMIT: !Ref MonthlyTokenLimit
       Code:
         S3Bucket: !Ref LambdaBucket
         S3Key: lambda/extract.zip
@@ -292,10 +323,8 @@ Resources:
           INTEREST_BUCKET: !Ref InterestBucket
           PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
           USAGE_TABLE: !Ref UsageTable
+          TIERS_TABLE: !Ref UsageTiersTable
           USER_POOL_ID: !Ref UserPool
-          DAILY_TOKEN_LIMIT: !Ref DailyTokenLimit
-          WEEKLY_TOKEN_LIMIT: !Ref WeeklyTokenLimit
-          MONTHLY_TOKEN_LIMIT: !Ref MonthlyTokenLimit
       Code:
         S3Bucket: !Ref LambdaBucket
         S3Key: lambda/extract.zip
@@ -445,6 +474,24 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/status
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAdminTiersRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /admin/tiers
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PutAdminTierRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'PUT /admin/tiers/{tierId}'
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

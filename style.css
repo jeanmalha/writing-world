@@ -1817,3 +1817,63 @@ body.board-mode #board-panel {
 .admin-stat-processing { color: #facc15; }
 .admin-stat-done       { color: #22c55e; }
 .admin-stat-error      { color: #f87171; }
+
+.admin-tier-card {
+  border: 1px solid var(--panel-border);
+  padding: 1rem;
+  margin: .75rem;
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+}
+.admin-tier-header { display: flex; justify-content: space-between; align-items: center; }
+.admin-tier-name   { font-size: .9rem; letter-spacing: .06em; font-weight: bold; }
+
+.admin-tier-model-toggle { display: flex; gap: 4px; }
+.admin-model-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: .7rem;
+  padding: 2px 10px;
+  cursor: pointer;
+  letter-spacing: .04em;
+}
+.admin-model-btn.active { border-color: var(--accent); color: var(--accent); }
+.admin-model-btn:hover:not(.active) { color: var(--text); }
+
+.admin-tier-limits { display: flex; flex-direction: column; gap: 6px; }
+.admin-limit-row   { display: flex; align-items: center; gap: 8px; }
+.admin-limit-row label {
+  width: 56px;
+  font-size: .72rem;
+  color: var(--text-muted);
+  letter-spacing: .04em;
+}
+.admin-limit-input {
+  width: 110px;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: .78rem;
+  padding: 3px 8px;
+}
+.admin-limit-input:focus { outline: none; border-color: var(--accent); }
+.admin-limit-hint  { font-size: .68rem; color: var(--text-muted); }
+
+.admin-tier-footer { display: flex; justify-content: space-between; align-items: center; }
+.admin-tier-save {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: .72rem;
+  padding: 3px 14px;
+  cursor: pointer;
+  letter-spacing: .05em;
+}
+.admin-tier-save:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.admin-tier-save:disabled { opacity: .4; cursor: default; }
+.admin-tier-msg { font-size: .72rem; }

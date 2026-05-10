@@ -14,10 +14,10 @@ async function apiFetch(path, opts = {}) {
   });
 }
 
-export async function startExtraction(text, existingEntities = [], model = 'simple') {
+export async function startExtraction(text, existingEntities = []) {
   const resp = await apiFetch('/extract', {
     method: 'POST',
-    body:   JSON.stringify({ text, existingEntities, model }),
+    body:   JSON.stringify({ text, existingEntities }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -26,10 +26,10 @@ export async function startExtraction(text, existingEntities = [], model = 'simp
   return resp.json();   // { jobId, status: 'processing' }
 }
 
-export async function startPdfExtraction(pages, existingEntities = [], model = 'simple') {
+export async function startPdfExtraction(pages, existingEntities = []) {
   const resp = await apiFetch('/extract-pdf', {
     method: 'POST',
-    body:   JSON.stringify({ pages, existingEntities, model }),
+    body:   JSON.stringify({ pages, existingEntities }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -38,10 +38,10 @@ export async function startPdfExtraction(pages, existingEntities = [], model = '
   return resp.json();   // { jobId, status: 'processing' }
 }
 
-export async function startAnalysis(entities, model = 'simple') {
+export async function startAnalysis(entities) {
   const resp = await apiFetch('/analyze', {
     method: 'POST',
-    body:   JSON.stringify({ entities, model }),
+    body:   JSON.stringify({ entities }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -74,6 +74,22 @@ export async function saveWorld(data) {
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();   // { updatedAt }
+}
+
+export async function getAdminTiers() {
+  const resp = await apiFetch('/admin/tiers');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function updateAdminTier(tierId, config) {
+  const resp = await apiFetch(`/admin/tiers/${tierId}`, {
+    method: 'PUT',
+    body:   JSON.stringify(config),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
 }
 
 export async function getAdminUsers() {

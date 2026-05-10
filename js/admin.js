@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, getAdminStatus, getAdminUsage } from './api.js';
+import { getAdminUsers, createAdminUser, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier } from './api.js';
 
 let _tab = 'users';
 
@@ -16,6 +16,7 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
       <span class="list-title">Admin</span>
       <div class="admin-tabs">
         <button class="admin-tab${_tab === 'users'  ? ' active' : ''}" data-tab="users">Users</button>
+        <button class="admin-tab${_tab === 'tiers'  ? ' active' : ''}" data-tab="tiers">Tiers</button>
         <button class="admin-tab${_tab === 'status' ? ' active' : ''}" data-tab="status">Status</button>
         <button class="admin-tab${_tab === 'usage'  ? ' active' : ''}" data-tab="usage">Usage</button>
       </div>
@@ -32,6 +33,7 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
 
   try {
     if (_tab === 'users')  await _renderUsers(entityList, detailContent);
+    if (_tab === 'tiers')  await _renderTiers(entityList, detailContent);
     if (_tab === 'status') await _renderStatus(entityList, detailContent);
     if (_tab === 'usage')  await _renderUsage(entityList);
   } catch (err) {
@@ -104,6 +106,85 @@ async function _renderUsers(entityList, detailContent) {
   btn.addEventListener('click', doCreate);
   input.addEventListener('keydown', e => { if (e.key === 'Enter') doCreate(); });
   input.focus();
+}
+
+// ── Tiers tab ──────────────────────────────────────────────────────────────
+
+const TIER_COLORS = { explorer: '#60a5fa', trailblazer: '#a78bfa', uncharted: '#f59e0b' };
+
+async function _renderTiers(entityList, detailContent) {
+  const { tiers } = await getAdminTiers();
+  detailContent.innerHTML = '';
+
+  entityList.innerHTML = tiers.map(t => `
+    <div class="admin-tier-card" data-tier="${t.tierId}">
+      <div class="admin-tier-header">
+        <span class="admin-tier-name" style="color:${TIER_COLORS[t.tierId] || 'var(--accent)'}">${_esc(t.label)}</span>
+        <div class="admin-tier-model-toggle">
+          <button class="admin-model-btn${t.model === 'simple'  ? ' active' : ''}" data-tier="${t.tierId}" data-model="simple">Simple</button>
+          <button class="admin-model-btn${t.model === 'complex' ? ' active' : ''}" data-tier="${t.tierId}" data-model="complex">Complex</button>
+        </div>
+      </div>
+      <div class="admin-tier-limits">
+        <div class="admin-limit-row">
+          <label>Daily</label>
+          <input class="admin-limit-input" data-tier="${t.tierId}" data-field="dailyLimit"
+                 type="number" min="0" value="${t.dailyLimit}" placeholder="0 = unlimited">
+          <span class="admin-limit-hint">tokens</span>
+        </div>
+        <div class="admin-limit-row">
+          <label>Weekly</label>
+          <input class="admin-limit-input" data-tier="${t.tierId}" data-field="weeklyLimit"
+                 type="number" min="0" value="${t.weeklyLimit}" placeholder="0 = unlimited">
+          <span class="admin-limit-hint">tokens</span>
+        </div>
+        <div class="admin-limit-row">
+          <label>Monthly</label>
+          <input class="admin-limit-input" data-tier="${t.tierId}" data-field="monthlyLimit"
+                 type="number" min="0" value="${t.monthlyLimit}" placeholder="0 = unlimited">
+          <span class="admin-limit-hint">tokens</span>
+        </div>
+      </div>
+      <div class="admin-tier-footer">
+        <span class="admin-tier-msg" id="tier-msg-${t.tierId}"></span>
+        <button class="admin-tier-save" data-tier="${t.tierId}">Save</button>
+      </div>
+    </div>`).join('');
+
+  // Model toggle
+  entityList.querySelectorAll('.admin-model-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = entityList.querySelector(`.admin-tier-card[data-tier="${btn.dataset.tier}"]`);
+      card.querySelectorAll('.admin-model-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Save
+  entityList.querySelectorAll('.admin-tier-save').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const tierId = btn.dataset.tier;
+      const card   = entityList.querySelector(`.admin-tier-card[data-tier="${tierId}"]`);
+      const msg    = document.getElementById(`tier-msg-${tierId}`);
+      const model  = card.querySelector('.admin-model-btn.active')?.dataset.model || 'simple';
+      const limits = {};
+      card.querySelectorAll('.admin-limit-input').forEach(inp => {
+        limits[inp.dataset.field] = parseInt(inp.value) || 0;
+      });
+
+      btn.disabled = true;
+      msg.textContent = '';
+      try {
+        await updateAdminTier(tierId, { model, ...limits });
+        msg.textContent = '✓ Saved';
+        msg.className   = 'admin-tier-msg admin-msg-ok';
+      } catch (err) {
+        msg.textContent = `✗ ${err.message}`;
+        msg.className   = 'admin-tier-msg admin-msg-err';
+      }
+      btn.disabled = false;
+    });
+  });
 }
 
 // ── Status tab ─────────────────────────────────────────────────────────────
