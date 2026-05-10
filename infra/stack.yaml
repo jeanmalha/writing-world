@@ -46,6 +46,11 @@ Resources:
             response.statusCode = 404;
             response.statusDescription = 'Not Found';
           }
+          // Enable SharedArrayBuffer — required for threaded WASM and WebGPU.
+          // COEP 'credentialless' is less strict than 'require-corp': cross-origin
+          // sub-resources load without credentials rather than being blocked.
+          response.headers['cross-origin-opener-policy'] = { value: 'same-origin' };
+          response.headers['cross-origin-embedder-policy'] = { value: 'credentialless' };
           return response;
         }
 

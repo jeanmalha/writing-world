@@ -22,10 +22,6 @@ const MODEL_ID = 'HuggingFaceTB/SmolLM2-1.7B-Instruct';
 if (window.location.hostname !== 'localhost') {
   env.backends.onnx.wasm.wasmPaths = '/vendor/';
 }
-
-// Disable WebGPU — the dynamic import of onnxruntime-web/webgpu fails in
-// environments where the browser module system can't resolve it at runtime.
-// WASM gives reliable cross-browser inference; WebGPU can be re-enabled later.
 env.backends.onnx.wasm.proxy = false;
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -95,11 +91,22 @@ async function _load() {
     }
   };
 
-  _promise = pipeline('text-generation', MODEL_ID, {
-    dtype:             'q4',
-    device:            'wasm',
+  const _tryDevice = (device) => pipeline('text-generation', MODEL_ID, {
+    dtype:             device === 'webgpu' ? 'q4f16' : 'q4',
+    device,
     progress_callback: progressCallback,
-  }).then(pipe => {
+  });
+
+  _promise = (async () => {
+    if (isWebGPUSupported()) {
+      try { return await _tryDevice('webgpu'); }
+      catch (e) {
+        console.warn('[lore-ai] WebGPU failed, falling back to WASM:', e.message);
+        _files.clear();
+      }
+    }
+    return _tryDevice('wasm');
+  })().then(pipe => {
     _pipe    = pipe;
     _loading = false;
     _readyListeners.forEach(fn => fn(pipe, null));
