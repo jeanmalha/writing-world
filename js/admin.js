@@ -374,7 +374,7 @@ async function _renderUsage(entityList) {
 // ── Interest tab ───────────────────────────────────────────────────────────
 
 async function _renderInterest(entityList) {
-  entityList.innerHTML = '<div class="admin-loading">Running Athena query…</div>';
+  entityList.innerHTML = '<div class="admin-loading">Loading…</div>';
   const data = await getAdminInterest();
 
   if (!data.total && !data.daily?.length) {

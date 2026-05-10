@@ -576,44 +576,29 @@ def admin_update_tier(event, tier_id):
 def admin_interest(event):
     if not _is_admin(event):
         return out(403, {'error': 'forbidden'})
-    if not ATHENA_RESULTS_BUCKET or not INTEREST_BUCKET:
-        return out(500, {'error': 'Athena not configured'})
-
-    import time as _time
+    if not INTEREST_BUCKET:
+        return out(500, {'error': 'INTEREST_BUCKET not configured'})
 
     try:
-        resp = athena.start_query_execution(
-            QueryString='SELECT timestamp, name, email, subscriptioninterest FROM lore_interest.submissions ORDER BY timestamp DESC',
-            ResultConfiguration={'OutputLocation': f's3://{ATHENA_RESULTS_BUCKET}/interest-queries/'},
-            WorkGroup='primary',
-        )
-        qid = resp['QueryExecutionId']
+        rows = []
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=INTEREST_BUCKET, Prefix='submissions/'):
+            for obj in page.get('Contents', []):
+                if not obj['Key'].endswith('.json'):
+                    continue
+                try:
+                    body   = s3.get_object(Bucket=INTEREST_BUCKET, Key=obj['Key'])['Body'].read()
+                    record = json.loads(body)
+                    rows.append({
+                        'timestamp': record.get('timestamp', ''),
+                        'name':      record.get('name', ''),
+                        'email':     record.get('email', ''),
+                        'interested': bool(record.get('subscriptionInterest', False)),
+                    })
+                except Exception:
+                    continue
 
-        for _ in range(25):
-            _time.sleep(1)
-            status = athena.get_query_execution(QueryExecutionId=qid)['QueryExecution']['Status']
-            state  = status['State']
-            if state == 'SUCCEEDED':
-                break
-            if state in ('FAILED', 'CANCELLED'):
-                return out(500, {'error': status.get('StateChangeReason', 'Athena query failed')})
-        else:
-            return out(504, {'error': 'Athena query timed out'})
-
-        rows  = []
-        first = True
-        for page in athena.get_paginator('get_query_results').paginate(QueryExecutionId=qid):
-            for row in page['ResultSet']['Rows']:
-                if first:
-                    first = False
-                    continue  # skip column header
-                d = row['Data']
-                rows.append({
-                    'timestamp': d[0].get('VarCharValue', ''),
-                    'name':      d[1].get('VarCharValue', ''),
-                    'email':     d[2].get('VarCharValue', ''),
-                    'interested': d[3].get('VarCharValue', 'false') == 'true',
-                })
+        rows.sort(key=lambda r: r['timestamp'], reverse=True)
 
         total      = len(rows)
         interested = sum(1 for r in rows if r['interested'])
@@ -636,12 +621,6 @@ def admin_interest(event):
             'recent':     rows[:20],
         })
 
-    except athena.exceptions.InvalidRequestException as e:
-        err = str(e)
-        # Table not yet populated — return empty stats
-        if 'TABLE_NOT_FOUND' in err or 'SCHEMA_ERROR' in err or 'does not exist' in err.lower():
-            return out(200, {'total': 0, 'interested': 0, 'daily': [], 'recent': []})
-        return out(500, {'error': err})
     except Exception as e:
         return out(500, {'error': str(e)})
 
