@@ -14,10 +14,10 @@ async function apiFetch(path, opts = {}) {
   });
 }
 
-export async function startExtraction(text, existingEntities = []) {
+export async function startExtraction(text, existingEntities = [], model = 'simple') {
   const resp = await apiFetch('/extract', {
     method: 'POST',
-    body:   JSON.stringify({ text, existingEntities }),
+    body:   JSON.stringify({ text, existingEntities, model }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -26,10 +26,10 @@ export async function startExtraction(text, existingEntities = []) {
   return resp.json();   // { jobId, status: 'processing' }
 }
 
-export async function startPdfExtraction(pages, existingEntities = []) {
+export async function startPdfExtraction(pages, existingEntities = [], model = 'simple') {
   const resp = await apiFetch('/extract-pdf', {
     method: 'POST',
-    body:   JSON.stringify({ pages, existingEntities }),
+    body:   JSON.stringify({ pages, existingEntities, model }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -38,10 +38,10 @@ export async function startPdfExtraction(pages, existingEntities = []) {
   return resp.json();   // { jobId, status: 'processing' }
 }
 
-export async function startAnalysis(entities) {
+export async function startAnalysis(entities, model = 'simple') {
   const resp = await apiFetch('/analyze', {
     method: 'POST',
-    body:   JSON.stringify({ entities }),
+    body:   JSON.stringify({ entities, model }),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));

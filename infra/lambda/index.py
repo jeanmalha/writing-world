@@ -219,10 +219,18 @@ def start_job(event, job_type):
     if not ok:
         return out(429, {'error': reason})
 
+    # Determine model: user may request 'simple' or 'complex', but Explorer is capped at 'simple'
+    requested = body.get('model', tier_config['model'])
+    if requested not in ('simple', 'complex'):
+        requested = tier_config['model']
+    if requested == 'complex' and tier_config['model'] == 'simple':
+        return out(403, {'error': 'upgrade_required',
+                         'message': 'Upgrade to Trailblazer or Uncharted to use the Complex model.'})
+    mode = requested
+
     job_id = str(uuid.uuid4())
     ttl    = int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp())
     now    = datetime.now(timezone.utc).isoformat()
-    mode   = tier_config['model']  # tier determines the model
 
     item = {'jobId': job_id, 'jobType': job_type, 'status': 'processing',
             'modelMode': mode, 'startedAt': now, 'ttl': ttl}

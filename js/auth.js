@@ -101,6 +101,23 @@ export function isAdmin() {
   } catch { return false; }
 }
 
+export function getUserTier() {
+  try {
+    const token = localStorage.getItem(LS.ACCESS);
+    if (!token) return null;
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const raw     = payload['cognito:groups'];
+    if (!raw) return null;
+    const groups  = Array.isArray(raw)
+      ? raw
+      : String(raw).replace(/[\[\] ]/g, '').split(',').filter(Boolean);
+    if (groups.includes('uncharted'))   return 'uncharted';
+    if (groups.includes('trailblazer')) return 'trailblazer';
+    if (groups.includes('explorer'))    return 'explorer';
+    return null;
+  } catch { return null; }
+}
+
 export function logout() {
   [LS.ACCESS, LS.ID, LS.REFRESH, LS.EXPIRY].forEach(k => localStorage.removeItem(k));
   if (!isAuthEnabled) return;

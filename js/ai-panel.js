@@ -1,10 +1,11 @@
 import { store, TYPES } from './store.js';
-import { isAuthenticated, login } from './auth.js';
+import { isAuthenticated, login, getUserTier } from './auth.js';
 import { startExtraction, startAnalysis, startPdfExtraction, pollJob } from './api.js';
 
 // Module state — persists while AI view is active
 let _mode    = 'extract';   // 'extract' | 'analyze'
 let _source  = 'text';      // 'text' | 'pdf'
+let _model   = 'simple';    // 'simple' | 'complex'
 let _text    = '';
 let _results = null;
 let _status  = '';
@@ -96,6 +97,14 @@ function renderAiList(listHeader, entityList, detailContent) {
     if (_source !== 'pdf') { _source = 'pdf'; rerender(listHeader, entityList, detailContent); }
   });
 
+  // Model toggle
+  document.getElementById('btn-model-simple')?.addEventListener('click', () => {
+    if (_model !== 'simple') { _model = 'simple'; rerender(listHeader, entityList, detailContent); }
+  });
+  document.getElementById('btn-model-complex')?.addEventListener('click', () => {
+    if (_model !== 'complex') { _model = 'complex'; rerender(listHeader, entityList, detailContent); }
+  });
+
   // PDF file input
   document.getElementById('ai-pdf-input')?.addEventListener('change', async e => {
     const file = e.target.files[0];
@@ -117,8 +126,22 @@ function renderAiList(listHeader, entityList, detailContent) {
   });
 }
 
+function _modelToggleHtml() {
+  const tier         = getUserTier();
+  const explorerOnly = tier === 'explorer';
+  const blocked      = explorerOnly && _model === 'complex';
+  return `
+    <div class="ai-model-toggle">
+      <button class="ai-model-btn${_model === 'simple'  ? ' active' : ''}" id="btn-model-simple">Simple</button>
+      <button class="ai-model-btn${_model === 'complex' ? ' active' : ''}" id="btn-model-complex">Complex</button>
+    </div>
+    ${blocked ? `<div class="ai-upgrade-notice">◈ <strong>Trailblazer</strong> or <strong>Uncharted</strong> required for Complex.</div>` : ''}`;
+}
+
 function renderExtractInput() {
-  const srcText = _source === 'text';
+  const srcText  = _source === 'text';
+  const tier     = getUserTier();
+  const blocked  = tier === 'explorer' && _model === 'complex';
   return `<div class="ai-input-area">
     <div class="ai-source-toggle">
       <button class="ai-src-btn${srcText ? ' active' : ''}" id="btn-src-text">Text</button>
@@ -127,7 +150,8 @@ function renderExtractInput() {
     ${srcText ? `
       <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The model will extract and match against your existing entities.">${esc(_text)}</textarea>
     ` : renderPdfInput()}
-    <button id="btn-ai-run" ${_loading || (_source === 'pdf' && !_pdfPages.length && !_pdfExtracting) ? 'disabled' : ''}>
+    ${_modelToggleHtml()}
+    <button id="btn-ai-run" ${_loading || blocked || (_source === 'pdf' && !_pdfPages.length && !_pdfExtracting) ? 'disabled' : ''}>
       ${_loading ? (_source === 'pdf' ? '◈ Extracting PDF…' : '◈ Extracting…') : (_source === 'pdf' ? '▶ Extract PDF' : '▶ Extract')}
     </button>
     ${_status ? `<div class="ai-status-msg">${esc(_status)}</div>` : ''}
@@ -162,12 +186,15 @@ function renderPdfInput() {
 }
 
 function renderAnalyzeInput() {
-  const count = store.totalCount();
+  const count   = store.totalCount();
+  const tier    = getUserTier();
+  const blocked = tier === 'explorer' && _model === 'complex';
   return `<div class="ai-input-area">
     <div class="ai-analyze-desc">
       Analyzes your <strong>${count}</strong> existing entr${count !== 1 ? 'ies' : 'y'} and suggests missing links and potential duplicates.
     </div>
-    <button id="btn-ai-run" ${_loading || count === 0 ? 'disabled' : ''}>
+    ${_modelToggleHtml()}
+    <button id="btn-ai-run" ${_loading || blocked || count === 0 ? 'disabled' : ''}>
       ${_loading ? '◎ Analyzing…' : '▶ Analyze World'}
     </button>
     ${_status ? `<div class="ai-status-msg">${esc(_status)}</div>` : ''}
@@ -228,7 +255,7 @@ async function runExtract(listHeader, entityList, detailContent) {
     ...(e.date     ? { date:    e.date    } : {}),
   }));
 
-  await runJob(() => startExtraction(_text, existingEntities), 'extract',
+  await runJob(() => startExtraction(_text, existingEntities, _model), 'extract',
                listHeader, entityList, detailContent);
 }
 
@@ -241,7 +268,7 @@ async function runPdfExtract(listHeader, entityList, detailContent) {
     ...(e.locType ? { locType: e.locType } : {}),
   }));
 
-  await runJob(() => startPdfExtraction(_pdfPages, existingEntities),
+  await runJob(() => startPdfExtraction(_pdfPages, existingEntities, _model),
                'extract-pdf', listHeader, entityList, detailContent);
 }
 
@@ -259,7 +286,7 @@ async function runAnalyze(listHeader, entityList, detailContent) {
   }));
 
   if (!entities.length) return;
-  await runJob(() => startAnalysis(entities), 'analyze',
+  await runJob(() => startAnalysis(entities, _model), 'analyze',
                listHeader, entityList, detailContent);
 }
 
