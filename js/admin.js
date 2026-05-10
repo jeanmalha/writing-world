@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier } from './api.js';
+import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest } from './api.js';
 
 let _tab = 'users';
 
@@ -15,10 +15,11 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
     <div class="list-header-row">
       <span class="list-title">Admin</span>
       <div class="admin-tabs">
-        <button class="admin-tab${_tab === 'users'  ? ' active' : ''}" data-tab="users">Users</button>
-        <button class="admin-tab${_tab === 'tiers'  ? ' active' : ''}" data-tab="tiers">Tiers</button>
-        <button class="admin-tab${_tab === 'status' ? ' active' : ''}" data-tab="status">Status</button>
-        <button class="admin-tab${_tab === 'usage'  ? ' active' : ''}" data-tab="usage">Usage</button>
+        <button class="admin-tab${_tab === 'users'    ? ' active' : ''}" data-tab="users">Users</button>
+        <button class="admin-tab${_tab === 'tiers'    ? ' active' : ''}" data-tab="tiers">Tiers</button>
+        <button class="admin-tab${_tab === 'status'   ? ' active' : ''}" data-tab="status">Status</button>
+        <button class="admin-tab${_tab === 'usage'    ? ' active' : ''}" data-tab="usage">Usage</button>
+        <button class="admin-tab${_tab === 'interest' ? ' active' : ''}" data-tab="interest">Interest</button>
       </div>
     </div>`;
 
@@ -32,10 +33,11 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
   detailContent.innerHTML = '';
 
   try {
-    if (_tab === 'users')  await _renderUsers(entityList, detailContent);
-    if (_tab === 'tiers')  await _renderTiers(entityList, detailContent);
-    if (_tab === 'status') await _renderStatus(entityList, detailContent);
-    if (_tab === 'usage')  await _renderUsage(entityList);
+    if (_tab === 'users')    await _renderUsers(entityList, detailContent);
+    if (_tab === 'tiers')    await _renderTiers(entityList, detailContent);
+    if (_tab === 'status')   await _renderStatus(entityList, detailContent);
+    if (_tab === 'usage')    await _renderUsage(entityList);
+    if (_tab === 'interest') await _renderInterest(entityList);
   } catch (err) {
     entityList.innerHTML = `<div class="empty-state">Error: ${_esc(err.message)}</div>`;
   }
@@ -367,6 +369,77 @@ async function _renderUsage(entityList) {
           </tr>`).join('')}
       </tbody>
     </table>`;
+}
+
+// ── Interest tab ───────────────────────────────────────────────────────────
+
+async function _renderInterest(entityList) {
+  entityList.innerHTML = '<div class="admin-loading">Running Athena query…</div>';
+  const data = await getAdminInterest();
+
+  if (!data.total && !data.daily?.length) {
+    entityList.innerHTML = '<div class="empty-state">No interest submissions yet.</div>';
+    return;
+  }
+
+  const pct = data.total ? Math.round((data.interested / data.total) * 100) : 0;
+
+  entityList.innerHTML = `
+    <div class="admin-interest-wrap">
+
+      <div class="admin-stat-row">
+        <div class="admin-stat-card">
+          <div class="admin-stat-value">${data.total}</div>
+          <div class="admin-stat-label">Total signups</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-value" style="color:var(--accent)">${data.interested}</div>
+          <div class="admin-stat-label">Would pay $3/mo</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-value">${pct}%</div>
+          <div class="admin-stat-label">Conversion</div>
+        </div>
+      </div>
+
+      ${data.daily?.length ? `
+      <div class="admin-interest-section">
+        <div class="admin-interest-heading">Daily signups</div>
+        <table class="admin-table">
+          <thead>
+            <tr><th>Date</th><th style="text-align:right">Signups</th><th style="text-align:right">Interested</th></tr>
+          </thead>
+          <tbody>
+            ${data.daily.slice(0, 30).map(d => `
+              <tr>
+                <td>${_esc(d.day)}</td>
+                <td style="text-align:right">${d.total}</td>
+                <td style="text-align:right">${d.interested || '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : ''}
+
+      ${data.recent?.length ? `
+      <div class="admin-interest-section">
+        <div class="admin-interest-heading">Recent signups</div>
+        <table class="admin-table">
+          <thead>
+            <tr><th>Date</th><th>Name</th><th>Email</th><th style="text-align:center">$3/mo</th></tr>
+          </thead>
+          <tbody>
+            ${data.recent.map(r => `
+              <tr>
+                <td class="admin-uid">${_esc((r.timestamp || '').slice(0, 10))}</td>
+                <td>${_esc(r.name) || '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td>${_esc(r.email)}</td>
+                <td style="text-align:center;color:var(--accent)">${r.interested ? '✓' : ''}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : ''}
+
+    </div>`;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

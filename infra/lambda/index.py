@@ -7,15 +7,17 @@ ddb     = boto3.resource('dynamodb')
 lam     = boto3.client('lambda')
 s3      = boto3.client('s3')
 cognito = boto3.client('cognito-idp')
+athena  = boto3.client('athena')
 
 TABLE         = os.environ['JOBS_TABLE']
 WORLD_TABLE   = os.environ.get('WORLD_TABLE', '')
 PROCESSOR_ARN = os.environ.get('PROCESSOR_ARN', '')
 PDF_BUCKET      = os.environ.get('PDF_BUCKET', '')
 INTEREST_BUCKET = os.environ.get('INTEREST_BUCKET', '')
-USAGE_TABLE   = os.environ.get('USAGE_TABLE', '')
-TIERS_TABLE   = os.environ.get('TIERS_TABLE', '')
-USER_POOL_ID  = os.environ.get('USER_POOL_ID', '')
+USAGE_TABLE          = os.environ.get('USAGE_TABLE', '')
+TIERS_TABLE          = os.environ.get('TIERS_TABLE', '')
+USER_POOL_ID         = os.environ.get('USER_POOL_ID', '')
+ATHENA_RESULTS_BUCKET = os.environ.get('ATHENA_RESULTS_BUCKET', '')
 SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS     = 2000
@@ -198,6 +200,8 @@ def handler(event, context):
         return admin_get_tiers(event)
     if method == 'PUT'  and '/admin/tiers/' in path:
         return admin_update_tier(event, path.split('/')[-1])
+    if method == 'GET'  and path.endswith('/admin/interest'):
+        return admin_interest(event)
     return out(404, {'error': 'not found'})
 
 
@@ -567,6 +571,81 @@ def admin_update_tier(event, tier_id):
     return out(200, {'ok': True})
 
 
+# ── Admin — interest analytics ────────────────────────────────────────────────
+
+def admin_interest(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if not ATHENA_RESULTS_BUCKET or not INTEREST_BUCKET:
+        return out(500, {'error': 'Athena not configured'})
+
+    import time as _time
+
+    try:
+        resp = athena.start_query_execution(
+            QueryString='SELECT timestamp, name, email, subscriptioninterest FROM lore_interest.submissions ORDER BY timestamp DESC',
+            ResultConfiguration={'OutputLocation': f's3://{ATHENA_RESULTS_BUCKET}/interest-queries/'},
+            WorkGroup='primary',
+        )
+        qid = resp['QueryExecutionId']
+
+        for _ in range(25):
+            _time.sleep(1)
+            status = athena.get_query_execution(QueryExecutionId=qid)['QueryExecution']['Status']
+            state  = status['State']
+            if state == 'SUCCEEDED':
+                break
+            if state in ('FAILED', 'CANCELLED'):
+                return out(500, {'error': status.get('StateChangeReason', 'Athena query failed')})
+        else:
+            return out(504, {'error': 'Athena query timed out'})
+
+        rows  = []
+        first = True
+        for page in athena.get_paginator('get_query_results').paginate(QueryExecutionId=qid):
+            for row in page['ResultSet']['Rows']:
+                if first:
+                    first = False
+                    continue  # skip column header
+                d = row['Data']
+                rows.append({
+                    'timestamp': d[0].get('VarCharValue', ''),
+                    'name':      d[1].get('VarCharValue', ''),
+                    'email':     d[2].get('VarCharValue', ''),
+                    'interested': d[3].get('VarCharValue', 'false') == 'true',
+                })
+
+        total      = len(rows)
+        interested = sum(1 for r in rows if r['interested'])
+
+        daily = {}
+        for r in rows:
+            day = r['timestamp'][:10]
+            if not day:
+                continue
+            if day not in daily:
+                daily[day] = {'day': day, 'total': 0, 'interested': 0}
+            daily[day]['total'] += 1
+            if r['interested']:
+                daily[day]['interested'] += 1
+
+        return out(200, {
+            'total':      total,
+            'interested': interested,
+            'daily':      sorted(daily.values(), key=lambda x: x['day'], reverse=True),
+            'recent':     rows[:20],
+        })
+
+    except athena.exceptions.InvalidRequestException as e:
+        err = str(e)
+        # Table not yet populated — return empty stats
+        if 'TABLE_NOT_FOUND' in err or 'SCHEMA_ERROR' in err or 'does not exist' in err.lower():
+            return out(200, {'total': 0, 'interested': 0, 'daily': [], 'recent': []})
+        return out(500, {'error': err})
+    except Exception as e:
+        return out(500, {'error': str(e)})
+
+
 # ── Interest form ─────────────────────────────────────────────────────────────
 
 def handle_interest(event):
@@ -589,7 +668,7 @@ def handle_interest(event):
     if INTEREST_BUCKET:
         key = f"submissions/{now.strftime('%Y/%m/%d')}/{uuid.uuid4()}.json"
         s3.put_object(Bucket=INTEREST_BUCKET, Key=key,
-                      Body=json.dumps(record, indent=2), ContentType='application/json')
+                      Body=json.dumps(record), ContentType='application/json')
 
     return out(200, {'ok': True})
 

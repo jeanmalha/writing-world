@@ -147,6 +147,12 @@ export async function getAdminUsage() {
   return resp.json();
 }
 
+export async function getAdminInterest() {
+  const resp = await apiFetch('/admin/interest');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function pollJob(endpoint, jobId) {
   const resp = await apiFetch(`/${endpoint}/${jobId}`);
   if (!resp.ok) {

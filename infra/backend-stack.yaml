@@ -91,6 +91,18 @@ Resources:
     Properties:
       BucketName: !Sub 'writing-world-interest-${AWS::AccountId}'
 
+  # ── S3 bucket for Athena query results ──────────────────────────────────────
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'writing-world-athena-${AWS::AccountId}'
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAthenaResults
+            Status: Enabled
+            ExpirationInDays: 7
+
   # ── S3 temp bucket for PDF page data ────────────────────────────────────────
 
   PdfTempBucket:
@@ -102,6 +114,45 @@ Resources:
           - Id: ExpirePdfJobs
             Status: Enabled
             ExpirationInDays: 1
+
+  # ── Glue catalogue for Athena on interest submissions ────────────────────────
+
+  InterestGlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: lore_interest
+
+  InterestGlueTable:
+    Type: AWS::Glue::Table
+    DependsOn: InterestGlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: lore_interest
+      TableInput:
+        Name: submissions
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+        StorageDescriptor:
+          Location: !Sub 's3://${InterestBucket}/submissions/'
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: 'true'
+              case.insensitive: 'true'
+          Columns:
+            - Name: timestamp
+              Type: string
+            - Name: name
+              Type: string
+            - Name: email
+              Type: string
+            - Name: subscriptioninterest
+              Type: boolean
 
   # ── DynamoDB ─────────────────────────────────────────────────────────────────
 
@@ -273,6 +324,32 @@ Resources:
                 Resource:
                   - !GetAtt InterestBucket.Arn
                   - !Sub '${InterestBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:StopQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:GetWorkGroup
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource:
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/lore_interest'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/lore_interest/submissions'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt AthenaResultsBucket.Arn
+                  - !Sub '${AthenaResultsBucket.Arn}/*'
 
   # ── Processor Lambda (Strands agent, async, long timeout) ───────────────────
 
@@ -293,6 +370,7 @@ Resources:
           WORLD_TABLE: !Ref WorldTable
           PDF_BUCKET: !Ref PdfTempBucket
           INTEREST_BUCKET: !Ref InterestBucket
+          ATHENA_RESULTS_BUCKET: !Ref AthenaResultsBucket
           PROCESSOR_ARN: ''
           USAGE_TABLE: !Ref UsageTable
           TIERS_TABLE: !Ref UsageTiersTable
@@ -320,6 +398,7 @@ Resources:
           WORLD_TABLE: !Ref WorldTable
           PDF_BUCKET: !Ref PdfTempBucket
           INTEREST_BUCKET: !Ref InterestBucket
+          ATHENA_RESULTS_BUCKET: !Ref AthenaResultsBucket
           PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
           USAGE_TABLE: !Ref UsageTable
           TIERS_TABLE: !Ref UsageTiersTable
@@ -528,6 +607,15 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/usage
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAdminInterestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /admin/interest
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

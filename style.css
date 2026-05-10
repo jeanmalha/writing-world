@@ -2284,3 +2284,18 @@ body.board-mode #board-panel {
 .admin-tier-save:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .admin-tier-save:disabled { opacity: .4; cursor: default; }
 .admin-tier-msg { font-size: .72rem; }
+
+/* ── Admin — Interest tab ────────────────────────────────── */
+.admin-interest-wrap { padding: 14px 12px; display: flex; flex-direction: column; gap: 20px; }
+.admin-stat-row { display: flex; gap: 10px; }
+.admin-stat-card {
+  flex: 1;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  padding: 12px 14px;
+  text-align: center;
+}
+.admin-stat-value { font-size: 1.6rem; font-weight: bold; color: var(--text); line-height: 1; }
+.admin-stat-label { font-size: .68rem; color: var(--text-muted); margin-top: 4px; letter-spacing: .06em; }
+.admin-interest-section { display: flex; flex-direction: column; gap: 6px; }
+.admin-interest-heading { font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
