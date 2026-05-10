@@ -76,6 +76,34 @@ export async function saveWorld(data) {
   return resp.json();   // { updatedAt }
 }
 
+export async function getAdminUsers() {
+  const resp = await apiFetch('/admin/users');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function createAdminUser(email) {
+  const resp = await apiFetch('/admin/users', {
+    method: 'POST',
+    body:   JSON.stringify({ email }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+export async function getAdminStatus() {
+  const resp = await apiFetch('/admin/status');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function getAdminUsage() {
+  const resp = await apiFetch('/admin/usage');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function pollJob(endpoint, jobId) {
   const resp = await apiFetch(`/${endpoint}/${jobId}`);
   if (!resp.ok) {

@@ -83,6 +83,17 @@ export function getUserEmail() {
   } catch { return null; }
 }
 
+export function isAdmin() {
+  try {
+    const token = localStorage.getItem(LS.ACCESS);
+    if (!token) return false;
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const groups  = payload['cognito:groups'];
+    if (!groups) return false;
+    return Array.isArray(groups) ? groups.includes('admins') : String(groups).split(',').includes('admins');
+  } catch { return false; }
+}
+
 export function logout() {
   [LS.ACCESS, LS.ID, LS.REFRESH, LS.EXPIRY].forEach(k => localStorage.removeItem(k));
   if (!isAuthEnabled) return;

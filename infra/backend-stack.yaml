@@ -24,6 +24,21 @@ Parameters:
     Type: String
     Description: S3 bucket holding lambda/extract.zip (set by deploy-backend.sh)
 
+  DailyTokenLimit:
+    Type: Number
+    Default: 0
+    Description: Max tokens per user per day (0 = unlimited)
+
+  WeeklyTokenLimit:
+    Type: Number
+    Default: 0
+    Description: Max tokens per user per week (0 = unlimited)
+
+  MonthlyTokenLimit:
+    Type: Number
+    Default: 0
+    Description: Max tokens per user per month (0 = unlimited)
+
 Resources:
 
   # ── Cognito ──────────────────────────────────────────────────────────────────
@@ -128,6 +143,34 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  UsageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: writing-world-usage
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ── Cognito admin group ───────────────────────────────────────────────────────
+
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admins
+      UserPoolId: !Ref UserPool
+      Description: Platform administrators
+
   # ── IAM Role (shared by both Lambda functions) ───────────────────────────────
 
   LambdaRole:
@@ -163,9 +206,24 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:GetItem
                   - dynamodb:UpdateItem
+                  - dynamodb:Scan
                 Resource:
                   - !GetAtt JobsTable.Arn
                   - !GetAtt WorldTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt UsageTable.Arn
+              - Effect: Allow
+                Action:
+                  - cognito-idp:ListUsers
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminGetUser
+                Resource: !GetAtt UserPool.Arn
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:writing-world-*'
@@ -204,6 +262,11 @@ Resources:
           PDF_BUCKET: !Ref PdfTempBucket
           INTEREST_BUCKET: !Ref InterestBucket
           PROCESSOR_ARN: ''
+          USAGE_TABLE: !Ref UsageTable
+          USER_POOL_ID: !Ref UserPool
+          DAILY_TOKEN_LIMIT: !Ref DailyTokenLimit
+          WEEKLY_TOKEN_LIMIT: !Ref WeeklyTokenLimit
+          MONTHLY_TOKEN_LIMIT: !Ref MonthlyTokenLimit
       Code:
         S3Bucket: !Ref LambdaBucket
         S3Key: lambda/extract.zip
@@ -228,6 +291,11 @@ Resources:
           PDF_BUCKET: !Ref PdfTempBucket
           INTEREST_BUCKET: !Ref InterestBucket
           PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
+          USAGE_TABLE: !Ref UsageTable
+          USER_POOL_ID: !Ref UserPool
+          DAILY_TOKEN_LIMIT: !Ref DailyTokenLimit
+          WEEKLY_TOKEN_LIMIT: !Ref WeeklyTokenLimit
+          MONTHLY_TOKEN_LIMIT: !Ref MonthlyTokenLimit
       Code:
         S3Bucket: !Ref LambdaBucket
         S3Key: lambda/extract.zip
@@ -350,6 +418,42 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: 'GET /analyze/{jobId}'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAdminUsersRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /admin/users
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PostAdminUsersRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /admin/users
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAdminStatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /admin/status
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAdminUsageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /admin/usage
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

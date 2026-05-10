@@ -3,22 +3,112 @@ from datetime import datetime, timezone, timedelta
 from strands import Agent, tool
 from strands.models.bedrock import BedrockModel
 
-ddb = boto3.resource('dynamodb')
-lam = boto3.client('lambda')
-s3  = boto3.client('s3')
+ddb     = boto3.resource('dynamodb')
+lam     = boto3.client('lambda')
+s3      = boto3.client('s3')
+cognito = boto3.client('cognito-idp')
 
 TABLE         = os.environ['JOBS_TABLE']
 WORLD_TABLE   = os.environ.get('WORLD_TABLE', '')
 PROCESSOR_ARN = os.environ.get('PROCESSOR_ARN', '')
 PDF_BUCKET      = os.environ.get('PDF_BUCKET', '')
 INTEREST_BUCKET = os.environ.get('INTEREST_BUCKET', '')
-SIMPLE_MODEL    = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
+USAGE_TABLE     = os.environ.get('USAGE_TABLE', '')
+USER_POOL_ID    = os.environ.get('USER_POOL_ID', '')
+SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
+DAILY_LIMIT   = int(os.environ.get('DAILY_TOKEN_LIMIT',   '0'))
+WEEKLY_LIMIT  = int(os.environ.get('WEEKLY_TOKEN_LIMIT',  '0'))
+MONTHLY_LIMIT = int(os.environ.get('MONTHLY_TOKEN_LIMIT', '0'))
 CHUNK_WORDS   = 2000
 PDF_CHUNK_PAGES = 5
 
 def resolve_model(mode):
     return COMPLEX_MODEL if mode == 'complex' else SIMPLE_MODEL
+
+
+# ── Admin helpers ────────────────────────────────────────────────────────────
+
+def _is_admin(event):
+    try:
+        claims = event['requestContext']['authorizer']['jwt']['claims']
+        groups = claims.get('cognito:groups', '')
+        if not groups:
+            return False
+        if groups.startswith('['):
+            return 'admins' in json.loads(groups)
+        return 'admins' in groups.split(',')
+    except Exception:
+        return False
+
+
+# ── Usage metering ────────────────────────────────────────────────────────────
+
+def _add_usage(agent_result, totals):
+    """Pull token counts from a Strands AgentResult into a running totals dict."""
+    if totals is None:
+        return
+    try:
+        acc = agent_result.metrics.accumulated_usage
+        totals['input']  += acc.get('inputTokens', 0) or 0
+        totals['output'] += acc.get('outputTokens', 0) or 0
+    except Exception:
+        pass
+
+
+def _record_usage(user_id, input_tokens, output_tokens):
+    if not USAGE_TABLE or not user_id:
+        return
+    total = input_tokens + output_tokens
+    if not total:
+        return
+    try:
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        ttl   = int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp())
+        ddb.Table(USAGE_TABLE).update_item(
+            Key={'userId': user_id, 'date': today},
+            UpdateExpression='ADD inputTokens :i, outputTokens :o, totalTokens :t SET #ttl = :ttl',
+            ExpressionAttributeNames={'#ttl': 'ttl'},
+            ExpressionAttributeValues={':i': input_tokens, ':o': output_tokens, ':t': total, ':ttl': ttl},
+        )
+    except Exception as e:
+        print(f'Usage recording failed: {e}')
+
+
+def _check_usage_limit(user_id):
+    """Returns (ok, reason). ok=False means a limit is exceeded."""
+    if not USAGE_TABLE or not user_id:
+        return True, ''
+    if not any([DAILY_LIMIT, WEEKLY_LIMIT, MONTHLY_LIMIT]):
+        return True, ''
+    try:
+        today = datetime.now(timezone.utc)
+        dates = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(30)]
+        resp  = ddb.batch_get_item(RequestItems={
+            USAGE_TABLE: {'Keys': [{'userId': user_id, 'date': d} for d in dates]}
+        })
+        rows    = resp.get('Responses', {}).get(USAGE_TABLE, [])
+        by_date = {r['date']: int(r.get('totalTokens', 0)) for r in rows}
+
+        if DAILY_LIMIT:
+            day = by_date.get(today.strftime('%Y-%m-%d'), 0)
+            if day >= DAILY_LIMIT:
+                return False, f'Daily token limit reached ({day:,}/{DAILY_LIMIT:,})'
+
+        if WEEKLY_LIMIT:
+            week = sum(by_date.get((today - timedelta(days=i)).strftime('%Y-%m-%d'), 0) for i in range(7))
+            if week >= WEEKLY_LIMIT:
+                return False, f'Weekly token limit reached ({week:,}/{WEEKLY_LIMIT:,})'
+
+        if MONTHLY_LIMIT:
+            month = sum(by_date.get((today - timedelta(days=i)).strftime('%Y-%m-%d'), 0) for i in range(30))
+            if month >= MONTHLY_LIMIT:
+                return False, f'Monthly token limit reached ({month:,}/{MONTHLY_LIMIT:,})'
+
+        return True, ''
+    except Exception as e:
+        print(f'Usage limit check failed: {e}')
+        return True, ''  # fail open
 
 
 # ── API handler ──────────────────────────────────────────────────────────────
@@ -46,6 +136,14 @@ def handler(event, context):
         return start_job(event, 'analyze')
     if method == 'GET'  and '/analyze/' in path:
         return poll(path.split('/')[-1])
+    if method == 'GET'  and path.endswith('/admin/users'):
+        return admin_list_users(event)
+    if method == 'POST' and path.endswith('/admin/users'):
+        return admin_create_user(event)
+    if method == 'GET'  and path.endswith('/admin/status'):
+        return admin_status(event)
+    if method == 'GET'  and path.endswith('/admin/usage'):
+        return admin_usage(event)
     return out(404, {'error': 'not found'})
 
 
@@ -55,6 +153,11 @@ def start_job(event, job_type):
     except Exception:
         return out(400, {'error': 'invalid JSON'})
 
+    user_id = _user_id(event)
+    ok, reason = _check_usage_limit(user_id)
+    if not ok:
+        return out(429, {'error': reason})
+
     job_id = str(uuid.uuid4())
     ttl    = int((datetime.now(timezone.utc) + timedelta(hours=24)).timestamp())
     now    = datetime.now(timezone.utc).isoformat()
@@ -62,6 +165,9 @@ def start_job(event, job_type):
 
     item = {'jobId': job_id, 'jobType': job_type, 'status': 'processing',
             'modelMode': mode, 'startedAt': now, 'ttl': ttl}
+
+    if user_id:
+        item['userId'] = user_id
 
     if job_type == 'extract':
         text = str(body.get('text', '')).strip()
@@ -77,7 +183,6 @@ def start_job(event, job_type):
         if not pages:
             return out(400, {'error': 'pages is required'})
         existing = body.get('existingEntities', [])
-        # Store pages in S3 (DynamoDB 400 KB item limit is too small for a novel)
         s3_key = f'pdf-jobs/{job_id}.json'
         s3.put_object(Bucket=PDF_BUCKET, Key=s3_key,
                       Body=json.dumps(pages),
@@ -119,6 +224,149 @@ def poll(job_id):
     elif status == 'error':
         resp['error'] = item.get('error', 'Processing timed out or failed')
     return out(200, resp)
+
+
+# ── Admin routes ──────────────────────────────────────────────────────────────
+
+def admin_list_users(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if not USER_POOL_ID:
+        return out(500, {'error': 'USER_POOL_ID not configured'})
+
+    users, pt = [], None
+    while True:
+        kwargs = {'UserPoolId': USER_POOL_ID, 'Limit': 60}
+        if pt:
+            kwargs['PaginationToken'] = pt
+        resp = cognito.list_users(**kwargs)
+        for u in resp.get('Users', []):
+            attrs = {a['Name']: a['Value'] for a in u.get('Attributes', [])}
+            users.append({
+                'sub':     attrs.get('sub', ''),
+                'email':   attrs.get('email', ''),
+                'status':  u.get('UserStatus', ''),
+                'enabled': u.get('Enabled', True),
+                'created': u['UserCreateDate'].isoformat() if u.get('UserCreateDate') else '',
+            })
+        pt = resp.get('PaginationToken')
+        if not pt:
+            break
+
+    return out(200, {'users': users})
+
+
+def admin_create_user(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if not USER_POOL_ID:
+        return out(500, {'error': 'USER_POOL_ID not configured'})
+
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(400, {'error': 'invalid JSON'})
+
+    email = str(body.get('email', '')).strip()
+    if not email:
+        return out(400, {'error': 'email is required'})
+
+    try:
+        cognito.admin_create_user(
+            UserPoolId=USER_POOL_ID,
+            Username=email,
+            UserAttributes=[
+                {'Name': 'email',          'Value': email},
+                {'Name': 'email_verified', 'Value': 'true'},
+            ],
+            DesiredDeliveryMediums=['EMAIL'],
+        )
+        return out(200, {'ok': True, 'email': email})
+    except cognito.exceptions.UsernameExistsException:
+        return out(409, {'error': 'User already exists'})
+    except Exception as e:
+        return out(500, {'error': str(e)})
+
+
+def admin_status(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+
+    # Job counts (table has 24h TTL so this reflects recent activity)
+    job_counts = {'processing': 0, 'done': 0, 'error': 0}
+    try:
+        resp = ddb.Table(TABLE).scan(
+            FilterExpression='#s IN (:p, :d, :e)',
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':p': 'processing', ':d': 'done', ':e': 'error'},
+        )
+        for j in resp.get('Items', []):
+            s = j.get('status', '')
+            if s in job_counts:
+                job_counts[s] += 1
+    except Exception:
+        pass
+
+    # User count (paginate Cognito, cap at 1000)
+    user_count = 0
+    try:
+        pt = None
+        while True:
+            kwargs = {'UserPoolId': USER_POOL_ID, 'Limit': 60}
+            if pt:
+                kwargs['PaginationToken'] = pt
+            resp = cognito.list_users(**kwargs)
+            user_count += len(resp.get('Users', []))
+            pt = resp.get('PaginationToken')
+            if not pt or user_count >= 1000:
+                break
+    except Exception:
+        user_count = -1
+
+    return out(200, {
+        'jobs': job_counts,
+        'userCount': user_count,
+        'config': {
+            'simpleModel':  SIMPLE_MODEL,
+            'complexModel': COMPLEX_MODEL,
+            'dailyLimit':   DAILY_LIMIT,
+            'weeklyLimit':  WEEKLY_LIMIT,
+            'monthlyLimit': MONTHLY_LIMIT,
+        },
+    })
+
+
+def admin_usage(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if not USAGE_TABLE:
+        return out(200, {'rows': []})
+
+    try:
+        today = datetime.now(timezone.utc)
+        resp  = ddb.Table(USAGE_TABLE).scan()
+        rows  = resp.get('Items', [])
+
+        by_user = {}
+        for row in rows:
+            uid  = row.get('userId', '')
+            date = row.get('date', '')
+            tok  = int(row.get('totalTokens', 0))
+            if uid not in by_user:
+                by_user[uid] = {}
+            by_user[uid][date] = tok
+
+        result = []
+        for uid, by_date in by_user.items():
+            d1  = by_date.get(today.strftime('%Y-%m-%d'), 0)
+            d7  = sum(by_date.get((today - timedelta(days=i)).strftime('%Y-%m-%d'), 0) for i in range(7))
+            d30 = sum(by_date.get((today - timedelta(days=i)).strftime('%Y-%m-%d'), 0) for i in range(30))
+            result.append({'userId': uid, 'tokens1d': d1, 'tokens7d': d7, 'tokens30d': d30})
+
+        result.sort(key=lambda r: r['tokens30d'], reverse=True)
+        return out(200, {'rows': result})
+    except Exception as e:
+        return out(500, {'error': str(e)})
 
 
 # ── Interest form ────────────────────────────────────────────────────────────
@@ -203,19 +451,22 @@ def process(event, context):
     if not item:
         return
 
+    usage = {'input': 0, 'output': 0}
+
     try:
         existing  = json.loads(item.get('existing', '[]'))
         model_id  = resolve_model(item.get('modelMode', 'simple'))
+        user_id   = item.get('userId')
 
         if job_type == 'extract':
-            result = run_extract_agent(item.get('text', ''), existing, model_id)
+            result = run_extract_agent(item.get('text', ''), existing, model_id, usage)
         elif job_type == 'extract-pdf':
             s3_key = item.get('s3Key', '')
             obj    = s3.get_object(Bucket=PDF_BUCKET, Key=s3_key)
             pages  = json.loads(obj['Body'].read())
-            result = run_extract_pdf_agent(pages, existing, model_id)
+            result = run_extract_pdf_agent(pages, existing, model_id, usage)
         else:
-            result = run_analyze_agent(existing, model_id)
+            result = run_analyze_agent(existing, model_id, usage)
 
         table.update_item(
             Key={'jobId': job_id},
@@ -223,6 +474,9 @@ def process(event, context):
             ExpressionAttributeNames={'#s': 'status', '#r': 'result'},
             ExpressionAttributeValues={':s': 'done', ':r': json.dumps(result)},
         )
+
+        _record_usage(user_id, usage['input'], usage['output'])
+
     except Exception as e:
         table.update_item(
             Key={'jobId': job_id},
@@ -234,7 +488,7 @@ def process(event, context):
 
 # ── PDF orchestrator agent ────────────────────────────────────────────────────
 
-def run_extract_pdf_agent(pages: list, existing: list, model_id: str) -> dict:
+def run_extract_pdf_agent(pages: list, existing: list, model_id: str, usage: dict = None) -> dict:
     """Orchestrator: splits pages into PDF_CHUNK_PAGES-page chunks, runs one sub-agent per chunk."""
 
     chunks = []
@@ -266,8 +520,8 @@ def run_extract_pdf_agent(pages: list, existing: list, model_id: str) -> dict:
             return f"Invalid index {chunk_index}. Valid range: 0–{len(chunks)-1}."
 
         chunk      = chunks[chunk_index]
-        sub_existing = existing + state['creates']  # pass cumulative creates as context
-        result     = run_extract_agent(chunk['text'], sub_existing, model_id)
+        sub_existing = existing + state['creates']
+        result     = run_extract_agent(chunk['text'], sub_existing, model_id, usage)
 
         state['creates'].extend(result.get('creates', []))
         state['updates'].extend(result.get('updates', []))
@@ -311,11 +565,12 @@ def run_extract_pdf_agent(pages: list, existing: list, model_id: str) -> dict:
         ),
     )
 
-    agent(
+    result = agent(
         f"{existing_ctx}"
         f"Novel split into {len(chunks)} chunk(s):\n{chunk_list}\n\n"
         "Process all chunks in order, then finalize."
     )
+    _add_usage(result, usage)
 
     return {
         'creates': _dedupe(state['creates']),
@@ -326,7 +581,7 @@ def run_extract_pdf_agent(pages: list, existing: list, model_id: str) -> dict:
 
 # ── Extract agent ─────────────────────────────────────────────────────────────
 
-def run_extract_agent(text: str, existing: list, model_id: str) -> dict:
+def run_extract_agent(text: str, existing: list, model_id: str, usage: dict = None) -> dict:
     words  = text.split()
     state  = {
         'queue':   [' '.join(words[i:i+CHUNK_WORDS]) for i in range(0, len(words), CHUNK_WORDS)],
@@ -431,8 +686,9 @@ def run_extract_agent(text: str, existing: list, model_id: str) -> dict:
         ),
     )
 
-    agent(f"{existing_ctx}Process the {total} text chunk(s). "
-          "Call get_next_chunk, then create_entity or update_entity for each entity found.")
+    result = agent(f"{existing_ctx}Process the {total} text chunk(s). "
+                   "Call get_next_chunk, then create_entity or update_entity for each entity found.")
+    _add_usage(result, usage)
 
     return {
         'creates': _dedupe(state['creates']),
@@ -443,7 +699,7 @@ def run_extract_agent(text: str, existing: list, model_id: str) -> dict:
 
 # ── Analyze agent ─────────────────────────────────────────────────────────────
 
-def run_analyze_agent(entities: list, model_id: str) -> dict:
+def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict:
     state = {'links': [], 'merges': []}
 
     lines = []
@@ -506,11 +762,12 @@ def run_analyze_agent(entities: list, model_id: str) -> dict:
         ),
     )
 
-    agent(
+    result = agent(
         "Here are all entities in this novel world:\n\n"
         + "\n".join(lines)
         + "\n\nSuggest missing links and potential merges."
     )
+    _add_usage(result, usage)
 
     return {'links': state['links'], 'merges': state['merges']}
 

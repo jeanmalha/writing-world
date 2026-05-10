@@ -1,7 +1,8 @@
 import { store, TYPES, TYPE_FIELDS } from './store.js';
 import { initSplash, showSplash } from './splash.js';
-import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail } from './auth.js';
+import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail, isAdmin } from './auth.js';
 import { renderAiView } from './ai-panel.js';
+import { renderAdminView } from './admin.js';
 import { renderProjectView, renderSettingsView } from './project.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
@@ -84,6 +85,14 @@ function renderSidebar() {
     <span class="type-label">Settings</span>
   </button>`;
 
+  if (isAdmin()) {
+    const adminActive = state.view === 'admin' ? 'active' : '';
+    html += `<button class="type-btn ${adminActive}" id="btn-admin">
+      <span class="type-icon" style="color:#f87171">⬡</span>
+      <span class="type-label">Admin</span>
+    </button>`;
+  }
+
   typeNav.innerHTML = html;
   typeNav.querySelectorAll('[data-type]').forEach(btn =>
     btn.addEventListener('click', () => selectType(btn.dataset.type)));
@@ -92,6 +101,7 @@ function renderSidebar() {
   $('btn-board')?.addEventListener('click', showBoard);
   $('btn-ai')?.addEventListener('click', showAiPanel);
   $('btn-settings')?.addEventListener('click', showSettings);
+  $('btn-admin')?.addEventListener('click', showAdmin);
 }
 
 function updateAuthStatus() {
@@ -548,6 +558,13 @@ function showSettings() {
   renderAll();
 }
 
+function showAdmin() {
+  state.view = 'admin';
+  state.selectedId = null;
+  state.editing = false;
+  renderAll();
+}
+
 function handleNew() {
   const entity = store.create(state.type);
   state.selectedId = entity.id;
@@ -609,6 +626,7 @@ function renderAll() {
   else if   (state.view === 'ai')        { renderAiView(listHeader, entityList, detailContent); }
   else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderSidebar, renderAll); }
   else if   (state.view === 'settings')  { renderSettingsView(listHeader, entityList, detailContent, renderSidebar); }
+  else if   (state.view === 'admin')     { renderAdminView(listHeader, entityList, detailContent); }
   else                                   { renderList();     renderDetail(); }
   updateStatus();
   updateAuthStatus();
