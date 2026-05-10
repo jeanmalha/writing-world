@@ -7,21 +7,25 @@ import {
 // ── System prompt ──────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT =
-`You are a lore assistant for a worldbuilding knowledge base. The user manages characters, locations, events, artifacts, factions, species, and lore entries with relationships between them.
+`You are a lore assistant for a worldbuilding knowledge base.
 
-Help them query, update, summarize, and find inconsistencies in their lore. Answer concisely based on provided context.
+Answer questions concisely. Only output a JSON block when the user explicitly asks to make a change.
 
-When asked to modify an entry's fields, output a JSON code block:
+UPDATING AN ENTRY — output exactly this and nothing else:
 \`\`\`json
-{"action":"update","entityId":"<id>","changes":{"field":"value"}}
+{"action":"update","entityId":"PASTE_THE_ID_FROM_CURRENT_ENTRY","changes":{"fieldName":"new value"}}
+\`\`\`
+Rules:
+- entityId must be the exact value of the "id" field shown in CURRENT ENTRY below. Never use a name.
+- changes must be a flat object of field names and their new string values.
+- Valid field names: name, description, role, locType, date, importance, gender, skinTone, hairStyle, hairColor, eyeColor.
+
+ADDING A RELATIONSHIP — output exactly this:
+\`\`\`json
+{"action":"link","sourceId":"SOURCE_ID","targetId":"TARGET_ID","label":"relationship label"}
 \`\`\`
 
-When asked to add a relationship between two entries:
-\`\`\`json
-{"action":"link","sourceId":"<id>","targetId":"<id>","label":"<label>"}
-\`\`\`
-
-Only output a JSON block when the user explicitly asks to make a change. For questions and summaries, just answer in plain text.`;
+For all other requests (questions, summaries, analysis), answer in plain text only.`;
 
 // ── Module state ───────────────────────────────────────────────────────────
 
@@ -333,16 +337,46 @@ function _parseAssistant(text) {
   return { html, json };
 }
 
+function _resolveEntity(idOrName) {
+  if (!idOrName) return null;
+  // Try exact ID match first
+  const byId = store.get(idOrName);
+  if (byId) return byId;
+  // Fall back to case-insensitive name match
+  const lower = String(idOrName).toLowerCase();
+  return store.getAll().find(e => e.name?.toLowerCase() === lower) || null;
+}
+
+function _flattenChanges(changes) {
+  if (!changes || typeof changes !== 'object') return changes;
+  // Model sometimes wraps: {type:"update", details:{...}} or {changes:{...}}
+  if (changes.details && typeof changes.details === 'object') return changes.details;
+  if (changes.changes && typeof changes.changes === 'object') return changes.changes;
+  // Strip any non-string/non-primitive nested objects
+  const flat = {};
+  for (const [k, v] of Object.entries(changes)) {
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      flat[k] = String(v);
+    }
+  }
+  return Object.keys(flat).length ? flat : changes;
+}
+
 function _applyJSON(json) {
   try {
-    if (json.action === 'update' && json.entityId && json.changes) {
-      if (!store.get(json.entityId)) return false;
-      store.update(json.entityId, json.changes);
+    if (json.action === 'update' && json.entityId) {
+      const entity  = _resolveEntity(json.entityId);
+      if (!entity) return false;
+      const changes = _flattenChanges(json.changes);
+      if (!changes || !Object.keys(changes).length) return false;
+      store.update(entity.id, changes);
       return true;
     }
     if (json.action === 'link' && json.sourceId && json.targetId && json.label) {
-      if (!store.get(json.sourceId) || !store.get(json.targetId)) return false;
-      store.addLink(json.sourceId, json.targetId, json.label);
+      const src = _resolveEntity(json.sourceId);
+      const tgt = _resolveEntity(json.targetId);
+      if (!src || !tgt) return false;
+      store.addLink(src.id, tgt.id, json.label);
       return true;
     }
   } catch { /* ignore */ }
