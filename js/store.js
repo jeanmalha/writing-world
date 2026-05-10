@@ -68,6 +68,23 @@ function _naturalCmp(a, b) {
   return 0;
 }
 
+// Extract [year, monthIndex] from a date string that may contain month names.
+// Falls back to _naturalCmp within the same year+month.
+const _MONTHS = {
+  january:1,february:2,march:3,april:4,may:5,june:6,
+  july:7,august:8,september:9,october:10,november:11,december:12,
+};
+function _timeSortKey(dateStr) {
+  const d    = String(dateStr || '').toLowerCase();
+  const yM   = d.match(/\b(\d{4})\b/);
+  const year = yM ? parseInt(yM[1], 10) : 99999;
+  let month  = 0;
+  for (const [name, num] of Object.entries(_MONTHS)) {
+    if (d.includes(name)) { month = num; break; }
+  }
+  return [year, month];
+}
+
 function _emptyProject() {
   return {
     metadata:            {},
@@ -299,6 +316,10 @@ export const store = {
       .filter(e => e.type === 'event')
       .sort((a, b) => {
         const da = (a.date || '').trim(), db = (b.date || '').trim();
+        const [ya, ma] = _timeSortKey(da);
+        const [yb, mb] = _timeSortKey(db);
+        if (ya !== yb) return ya - yb;
+        if (ma !== mb) return ma - mb;
         const dc = _naturalCmp(da, db);
         return dc !== 0 ? dc : a.name.localeCompare(b.name);
       });
