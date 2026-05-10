@@ -8,6 +8,7 @@ import {
 
 const SYSTEM_PROMPT =
 `You are a lore assistant for a worldbuilding knowledge base.
+You have access to all entries in the world (listed below under ALL ENTRIES). Use them to answer questions about characters, locations, factions, events, and lore.
 
 Answer questions concisely. Only output a JSON block when the user explicitly asks to make a change.
 
@@ -269,13 +270,34 @@ function _syncSendBtn() {
 function _buildContext() {
   const lines = [SYSTEM_PROMPT, ''];
 
+  const all    = store.getAll();
   const counts = store.countByType();
-  const total  = Object.values(counts).reduce((a, b) => a + b, 0);
-  lines.push(`WORLD: ${total} entries — ${Object.entries(counts).map(([t, n]) => `${n} ${t}`).join(', ')}.`);
+  lines.push(`WORLD: ${all.length} entries — ${Object.entries(counts).filter(([, n]) => n > 0).map(([t, n]) => `${n} ${t}`).join(', ')}.`);
+
+  // Inject all entities compactly so the model knows the full world
+  if (all.length > 0) {
+    lines.push('', 'ALL ENTRIES:');
+    let budget    = 8000;
+    let truncated = 0;
+    for (const e of all) {
+      const extras = [];
+      if (e.role)       extras.push(`role:${e.role}`);
+      if (e.locType)    extras.push(`type:${e.locType}`);
+      if (e.date)       extras.push(`date:${e.date}`);
+      if (e.importance) extras.push(`importance:${e.importance}`);
+      const meta = extras.length ? ` (${extras.join(', ')})` : '';
+      const desc = e.description ? ' — ' + e.description.slice(0, 120) + (e.description.length > 120 ? '…' : '') : '';
+      const line = `[${e.type}] "${e.name}" id:${e.id}${meta}${desc}`;
+      if (budget - line.length < 200) { truncated++; continue; }
+      lines.push(line);
+      budget -= line.length + 1;
+    }
+    if (truncated > 0) lines.push(`…and ${truncated} more entries not shown (open them for full detail).`);
+  }
 
   const entity = _contextId ? store.get(_contextId) : null;
   if (entity) {
-    lines.push('', 'CURRENT ENTRY:', JSON.stringify(_serializeEntity(entity), null, 2));
+    lines.push('', 'CURRENT ENTRY (full detail):', JSON.stringify(_serializeEntity(entity), null, 2));
 
     if (entity.links?.length) {
       lines.push('', 'LINKED TO:');
@@ -285,7 +307,6 @@ function _buildContext() {
       });
     }
 
-    // Incoming links
     const incoming = store.incomingLinks(entity.id);
     if (incoming.length) {
       lines.push('', 'REFERENCED BY:');
