@@ -1,33 +1,65 @@
 /**
- * WebLLM engine singleton.
- * Swap this module for an API-backed implementation without touching chat.js.
+ * LLM engine singleton — Transformers.js backend.
+ * Swap this module for a different backend without touching chat.js.
  *
- * Public surface:
- *   isWebGPUSupported()  → bool
- *   isReady()            → bool
- *   isLoading()          → bool
- *   onProgress(fn)       → unsubscribe fn   — fn({progress, text})
- *   onReady(fn)          → unsubscribe fn   — fn(engine|null, err|null)
- *   initEngine()         → void (fire-and-forget)
+ * Public surface (must stay stable across backend swaps):
+ *   isWebGPUSupported()          → bool
+ *   isReady()                    → bool
+ *   isLoading()                  → bool
+ *   onProgress(fn)               → unsubscribe fn  —  fn({progress:0-1, text:string})
+ *   onReady(fn)                  → unsubscribe fn  —  fn(engine|null, err|null)
+ *   initEngine()                 → void (fire-and-forget)
  *   chat(messages, {onChunk, signal}) → Promise<string>
  */
 
-import { CreateMLCEngine } from '@mlc-ai/web-llm';
+import { pipeline, TextStreamer, env } from '@huggingface/transformers';
 
-const MODEL_ID = 'SmolLM2-1.7B-Instruct-q4f16_1-MLC';
+// ── Configuration ─────────────────────────────────────────────────────────────
 
-let _engine  = null;
+const MODEL_ID = 'HuggingFaceTB/SmolLM2-1.7B-Instruct';
+
+// Point ONNX Runtime WASM to our self-hosted files so no external CDN is used.
+// In local dev (localhost) the WASM falls back to Transformers.js defaults.
+if (window.location.hostname !== 'localhost') {
+  env.backends.onnx.wasm.wasmPaths = '/vendor/ort-web/';
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let _pipe    = null;
 let _loading = false;
 let _promise = null;
 
 const _progressListeners = new Set();
 const _readyListeners    = new Set();
 
+// Per-file download progress aggregator
+const _files = new Map(); // name → { loaded, total }
+
+function _computeProgress() {
+  let totalLoaded = 0, totalSize = 0;
+  for (const { loaded, total } of _files.values()) {
+    totalLoaded += loaded || 0;
+    totalSize   += total  || 0;
+  }
+  const pct = totalSize > 0 ? totalLoaded / totalSize : 0;
+  const mb  = (totalLoaded / 1e6).toFixed(0);
+  const tot = (totalSize   / 1e6).toFixed(0);
+  return {
+    progress: pct,
+    text: totalSize > 0
+      ? `Downloading model… ${mb} / ${tot} MB`
+      : 'Initialising model…',
+  };
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
 export function isWebGPUSupported() {
   return typeof navigator !== 'undefined' && 'gpu' in navigator;
 }
 
-export function isReady()   { return _engine !== null; }
+export function isReady()   { return _pipe !== null; }
 export function isLoading() { return _loading; }
 
 export function onProgress(fn) {
@@ -36,7 +68,7 @@ export function onProgress(fn) {
 }
 
 export function onReady(fn) {
-  if (_engine) { fn(_engine, null); return () => {}; }
+  if (_pipe) { fn(_pipe, null); return () => {}; }
   _readyListeners.add(fn);
   return () => _readyListeners.delete(fn);
 }
@@ -46,26 +78,27 @@ export function initEngine() {
 }
 
 async function _load() {
-  if (_engine || _loading) return _promise;
-
-  if (!isWebGPUSupported()) {
-    const err = new Error('WebGPU is not supported in this browser.');
-    _readyListeners.forEach(fn => fn(null, err));
-    _readyListeners.clear();
-    throw err;
-  }
+  if (_pipe || _loading) return _promise;
 
   _loading = true;
-  _promise = CreateMLCEngine(MODEL_ID, {
-    initProgressCallback(p) {
-      _progressListeners.forEach(fn => fn(p));
+  _promise = pipeline('text-generation', MODEL_ID, {
+    dtype:  'q4',
+    device: isWebGPUSupported() ? 'webgpu' : 'wasm',
+    progress_callback(p) {
+      // p.status: 'initiate' | 'download' | 'done' | 'ready'
+      if (p.status === 'download') {
+        _files.set(p.name, { loaded: p.loaded || 0, total: p.total || 0 });
+        _progressListeners.forEach(fn => fn(_computeProgress()));
+      } else if (p.status === 'initiate') {
+        _files.set(p.name, { loaded: 0, total: 0 });
+      }
     },
-  }).then(engine => {
-    _engine  = engine;
+  }).then(pipe => {
+    _pipe    = pipe;
     _loading = false;
-    _readyListeners.forEach(fn => fn(engine, null));
+    _readyListeners.forEach(fn => fn(pipe, null));
     _readyListeners.clear();
-    return engine;
+    return pipe;
   }).catch(err => {
     _loading = false;
     _readyListeners.forEach(fn => fn(null, err));
@@ -78,33 +111,36 @@ async function _load() {
 }
 
 export async function chat(messages, { onChunk, signal } = {}) {
-  if (!_engine) await _load();
+  if (!_pipe) await _load();
+
+  let full = '';
 
   if (onChunk) {
-    const stream = await _engine.chat.completions.create({
-      messages,
-      stream: true,
-      temperature: 0.7,
-      max_tokens: 512,
+    const streamer = new TextStreamer(_pipe.tokenizer, {
+      skip_prompt:         true,
+      skip_special_tokens: true,
+      callback_function(token) {
+        if (signal?.aborted) return;
+        full += token;
+        onChunk(token, full);
+      },
     });
 
-    let full = '';
-    try {
-      for await (const chunk of stream) {
-        if (signal?.aborted) break;
-        const delta = chunk.choices[0]?.delta?.content || '';
-        if (delta) { full += delta; onChunk(delta, full); }
-      }
-    } catch (e) {
-      if (!signal?.aborted) throw e;
-    }
-    return full;
+    await _pipe(messages, {
+      max_new_tokens: 512,
+      temperature:    0.7,
+      do_sample:      true,
+      streamer,
+    });
+  } else {
+    const result = await _pipe(messages, {
+      max_new_tokens: 512,
+      temperature:    0.7,
+      do_sample:      true,
+    });
+    // generated_text is an array of messages; the last is the new assistant turn
+    full = result[0].generated_text.at(-1)?.content ?? '';
   }
 
-  const resp = await _engine.chat.completions.create({
-    messages,
-    temperature: 0.7,
-    max_tokens: 512,
-  });
-  return resp.choices[0].message.content;
+  return full;
 }
