@@ -87,8 +87,8 @@ echo "  CF Domain:    https://$CF_DOMAIN"
 # treat them as new resources and fetch fresh — then cache for a year.
 #
 DEPLOY_VERSION=$(date +%s)
-TMPDIR=$(mktemp -d /tmp/writingworld-deploy.XXXXXX)
-mkdir -p "$TMPDIR/js"
+BUILD_DIR=$(mktemp -d /tmp/writingworld-deploy.XXXXXX)
+mkdir -p "$BUILD_DIR/js"
 
 info "Stamping version $DEPLOY_VERSION into JS imports…"
 
@@ -96,17 +96,17 @@ for src in "$APP_DIR"/js/*.js; do
   fname=$(basename "$src")
   # Rewrite:  from './foo.js'   →   from './foo.js?v=<ts>'
   sed "s/from '\(\.\/[^']*\.js\)'/from '\1?v=${DEPLOY_VERSION}'/g" \
-    "$src" > "$TMPDIR/js/$fname"
+    "$src" > "$BUILD_DIR/js/$fname"
 done
 
 # CSS (no imports to rewrite, just copy)
-cp "$APP_DIR/style.css" "$TMPDIR/style.css"
+cp "$APP_DIR/style.css" "$BUILD_DIR/style.css"
 
 # index.html: stamp the <script src> and <link href> entry points
 sed \
   -e "s|src=\"js/\([^\"]*\)\.js\"|src=\"js/\1.js?v=${DEPLOY_VERSION}\"|g" \
   -e "s|href=\"\([^\"]*\)\.css\"|href=\"\1.css?v=${DEPLOY_VERSION}\"|g" \
-  "$APP_DIR/index.html" > "$TMPDIR/index.html"
+  "$APP_DIR/index.html" > "$BUILD_DIR/index.html"
 
 success "Version stamping done."
 
@@ -114,24 +114,24 @@ success "Version stamping done."
 info "Uploading to s3://$BUCKET …"
 
 # JS files — immutable, cached forever (URL changes each deploy)
-aws s3 sync "$TMPDIR/js" "s3://$BUCKET/js" \
+aws s3 sync "$BUILD_DIR/js" "s3://$BUCKET/js" \
   --profile "$PROFILE" \
   --delete \
   --cache-control "public, max-age=31536000, immutable"
 
 # CSS — immutable
-aws s3 cp "$TMPDIR/style.css" "s3://$BUCKET/style.css" \
+aws s3 cp "$BUILD_DIR/style.css" "s3://$BUCKET/style.css" \
   --profile "$PROFILE" \
   --cache-control "public, max-age=31536000, immutable" \
   --content-type "text/css"
 
 # index.html — short cache; CloudFront invalidation keeps CDN fresh on deploy
-aws s3 cp "$TMPDIR/index.html" "s3://$BUCKET/index.html" \
+aws s3 cp "$BUILD_DIR/index.html" "s3://$BUCKET/index.html" \
   --profile "$PROFILE" \
   --cache-control "public, max-age=3600" \
   --content-type "text/html"
 
-rm -rf "$TMPDIR"
+rm -rf "$BUILD_DIR"
 success "Files uploaded."
 
 # ── 5. Invalidate CloudFront cache ────────────────────
