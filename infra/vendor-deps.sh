@@ -53,19 +53,19 @@ cat > "$WORK/entry.mjs" << 'ENTRY'
 export { pipeline, TextStreamer, env } from '@huggingface/transformers';
 ENTRY
 
-"$WORK/node_modules/.bin/esbuild" "$WORK/entry.mjs" \
-  --bundle \
-  --format=esm \
-  --platform=browser \
-  --conditions=browser \
-  --target=es2022 \
-  --external:'*.wasm' \
-  --define:process.env.NODE_ENV='"production"' \
-  --outfile="$WORK/lore-ai.mjs" \
-  --log-level=warning
+cat > "$WORK/ort-webgpu-entry.mjs" << 'ENTRY'
+export * from 'onnxruntime-web/webgpu';
+ENTRY
 
-BUNDLE_SIZE=$(du -sh "$WORK/lore-ai.mjs" | cut -f1)
-success "Bundle built: $BUNDLE_SIZE"
+ESBUILD="$WORK/node_modules/.bin/esbuild"
+ESBUILD_FLAGS=(--bundle --format=esm --platform=browser --conditions=browser
+               --target=es2022 --external:'*.wasm'
+               --define:process.env.NODE_ENV='"production"' --log-level=warning)
+
+"$ESBUILD" "$WORK/entry.mjs"          "${ESBUILD_FLAGS[@]}" --outfile="$WORK/lore-ai.mjs"
+"$ESBUILD" "$WORK/ort-webgpu-entry.mjs" "${ESBUILD_FLAGS[@]}" --outfile="$WORK/ort-webgpu.mjs"
+
+success "Bundles built: lore-ai $(du -sh "$WORK/lore-ai.mjs"|cut -f1)  ort-webgpu $(du -sh "$WORK/ort-webgpu.mjs"|cut -f1)"
 
 # ── Upload to S3 ──────────────────────────────────────────────────────────────
 upload_js() {
@@ -88,7 +88,8 @@ upload_wasm() {
 ORT="$WORK/node_modules/onnxruntime-web/dist"
 
 info "Uploading to S3…"
-upload_js "$WORK/lore-ai.mjs" "lore-ai.mjs"
+upload_js "$WORK/lore-ai.mjs"    "lore-ai.mjs"
+upload_js "$WORK/ort-webgpu.mjs" "ort-webgpu.mjs"
 
 # WASM binaries must sit at /vendor/ (same dir as the bundle) so ORT's
 # import.meta.url-based resolution finds them automatically.
@@ -100,17 +101,25 @@ upload_js   "$ORT/ort-wasm-simd-threaded.jsep.mjs"  "ort-wasm-simd-threaded.jsep
 success "All files uploaded."
 
 # ── Patch index.html importmap ────────────────────────────────────────────────
-BUNDLE_URL="https://${DOMAIN}/vendor/lore-ai.mjs"
+AI_URL="https://${DOMAIN}/vendor/lore-ai.mjs"
+ORT_WEBGPU_URL="https://${DOMAIN}/vendor/ort-webgpu.mjs"
 
-python3 - "$APP_DIR/index.html" "$BUNDLE_URL" << 'PYEOF'
+python3 - "$APP_DIR/index.html" "$AI_URL" "$ORT_WEBGPU_URL" << 'PYEOF'
 import re, sys
-path, url = sys.argv[1], sys.argv[2]
+path, ai_url, ort_url = sys.argv[1], sys.argv[2], sys.argv[3]
 html = open(path).read()
-new_imports = f'"imports": {{\n      "@huggingface/transformers": "{url}"\n    }}'
+new_imports = (
+  f'"imports": {{\n'
+  f'      "@huggingface/transformers": "{ai_url}",\n'
+  f'      "onnxruntime-web/webgpu":    "{ort_url}"\n'
+  f'    }}'
+)
 html = re.sub(r'"imports"\s*:\s*\{[^}]*\}', new_imports, html, flags=re.DOTALL)
 open(path, 'w').write(html)
 PYEOF
 
-success "index.html importmap updated → $BUNDLE_URL"
+success "index.html importmap updated"
+echo "  @huggingface/transformers → $AI_URL"
+echo "  onnxruntime-web/webgpu   → $ORT_WEBGPU_URL"
 echo ""
 warn "Run ./infra/deploy.sh sync to push the updated index.html."

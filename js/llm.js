@@ -82,19 +82,34 @@ async function _load() {
   if (_pipe || _loading) return _promise;
 
   _loading = true;
-  _promise = pipeline('text-generation', MODEL_ID, {
-    dtype:  'q4',
-    device: isWebGPUSupported() ? 'webgpu' : 'wasm',
-    progress_callback(p) {
-      // p.status: 'initiate' | 'download' | 'done' | 'ready'
-      if (p.status === 'download') {
-        _files.set(p.name, { loaded: p.loaded || 0, total: p.total || 0 });
-        _progressListeners.forEach(fn => fn(_computeProgress()));
-      } else if (p.status === 'initiate') {
-        _files.set(p.name, { loaded: 0, total: 0 });
+
+  const progressCallback = (p) => {
+    if (p.status === 'initiate') {
+      _files.set(p.name, { loaded: 0, total: 0 });
+    } else if (p.status === 'download') {
+      _files.set(p.name, { loaded: p.loaded || 0, total: p.total || 0 });
+      _progressListeners.forEach(fn => fn(_computeProgress()));
+    }
+  };
+
+  const _tryDevice = (device) => pipeline('text-generation', MODEL_ID, {
+    dtype: 'q4',
+    device,
+    progress_callback: progressCallback,
+  });
+
+  _promise = (async () => {
+    // Prefer WebGPU; fall back to WASM if the backend import fails
+    if (isWebGPUSupported()) {
+      try {
+        return await _tryDevice('webgpu');
+      } catch (e) {
+        console.warn('[lore-ai] WebGPU failed, falling back to WASM:', e.message);
+        _files.clear(); // reset progress for second attempt
       }
-    },
-  }).then(pipe => {
+    }
+    return _tryDevice('wasm');
+  })().then(pipe => {
     _pipe    = pipe;
     _loading = false;
     _readyListeners.forEach(fn => fn(pipe, null));
