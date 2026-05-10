@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- background -->
+  <rect width="32" height="32" rx="5" fill="#0d0d14"/>
+  <!-- left page -->
+  <path d="M3 9 C3 9 14 7 16 8 L16 24 C14 23 3 25 3 25 Z" fill="#dde6f0"/>
+  <!-- right page -->
+  <path d="M29 9 C29 9 18 7 16 8 L16 24 C18 23 29 25 29 25 Z" fill="#c8d5e5"/>
+  <!-- spine -->
+  <line x1="16" y1="8" x2="16" y2="24" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- left page lines -->
+  <line x1="6"  y1="13" x2="14" y2="12" stroke="#8899aa" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="6"  y1="16" x2="14" y2="15" stroke="#8899aa" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="6"  y1="19" x2="14" y2="18" stroke="#8899aa" stroke-width="0.9" stroke-linecap="round"/>
+  <!-- right page lines -->
+  <line x1="18" y1="12" x2="26" y2="13" stroke="#8899aa" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="18" y1="15" x2="26" y2="16" stroke="#8899aa" stroke-width="0.9" stroke-linecap="round"/>
+  <line x1="18" y1="18" x2="26" y2="19" stroke="#8899aa" stroke-width="0.9" stroke-linecap="round"/>
+</svg>
