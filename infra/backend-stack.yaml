@@ -115,6 +115,20 @@ Resources:
             Status: Enabled
             ExpirationInDays: 1
 
+  # ── Feature flags ─────────────────────────────────────────────────────────────
+
+  FeatureFlagsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: writing-world-features
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: flagId
+          KeyType: HASH
+      AttributeDefinitions:
+        - AttributeName: flagId
+          AttributeType: S
+
   # ── Glue catalogue for Athena on interest submissions ────────────────────────
 
   InterestGlueDatabase:
@@ -326,6 +340,12 @@ Resources:
                   - !Sub '${InterestBucket.Arn}/*'
               - Effect: Allow
                 Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                Resource: !GetAtt FeatureFlagsTable.Arn
+              - Effect: Allow
+                Action:
                   - athena:StartQueryExecution
                   - athena:StopQueryExecution
                   - athena:GetQueryExecution
@@ -371,6 +391,7 @@ Resources:
           PDF_BUCKET: !Ref PdfTempBucket
           INTEREST_BUCKET: !Ref InterestBucket
           ATHENA_RESULTS_BUCKET: !Ref AthenaResultsBucket
+          FEATURES_TABLE: !Ref FeatureFlagsTable
           PROCESSOR_ARN: ''
           USAGE_TABLE: !Ref UsageTable
           TIERS_TABLE: !Ref UsageTiersTable
@@ -399,6 +420,7 @@ Resources:
           PDF_BUCKET: !Ref PdfTempBucket
           INTEREST_BUCKET: !Ref InterestBucket
           ATHENA_RESULTS_BUCKET: !Ref AthenaResultsBucket
+          FEATURES_TABLE: !Ref FeatureFlagsTable
           PROCESSOR_ARN: !GetAtt ProcessorFunction.Arn
           USAGE_TABLE: !Ref UsageTable
           TIERS_TABLE: !Ref UsageTiersTable
@@ -607,6 +629,23 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/usage
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetFeaturesRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /features
+      AuthorizationType: NONE
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PutAdminFeatureRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'PUT /admin/features/{flagId}'
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

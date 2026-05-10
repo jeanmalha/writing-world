@@ -16,7 +16,16 @@ import { pipeline, TextStreamer, env } from '@huggingface/transformers';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const MODEL_ID = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+const MODEL_MAP = {
+  '360M': 'HuggingFaceTB/SmolLM2-360M-Instruct',
+  '1.7B': 'HuggingFaceTB/SmolLM2-1.7B-Instruct',
+};
+let _modelId = MODEL_MAP['360M'];
+
+export function setAssistantModel(key) {
+  if (_pipe || _loading) return; // too late to change once loading started
+  _modelId = MODEL_MAP[key] || MODEL_MAP['360M'];
+}
 
 // Point ORT WASM to our self-hosted binaries.
 if (window.location.hostname !== 'localhost') {
@@ -91,7 +100,7 @@ async function _load() {
     }
   };
 
-  const _tryDevice = (device) => pipeline('text-generation', MODEL_ID, {
+  const _tryDevice = (device) => pipeline('text-generation', _modelId, {
     dtype:             device === 'webgpu' ? 'q4f16' : 'q4',
     device,
     progress_callback: progressCallback,

@@ -1,6 +1,13 @@
 import { AUTH_CONFIG } from './config.js';
 import { getAccessToken } from './auth.js';
 
+export async function getFeatures() {
+  try {
+    const resp = await fetch(`${AUTH_CONFIG.apiEndpoint}/features`);
+    return resp.ok ? resp.json() : {};
+  } catch { return {}; }
+}
+
 async function apiFetch(path, opts = {}) {
   const token = getAccessToken();
   if (!token) throw new Error('Not authenticated');
@@ -149,6 +156,15 @@ export async function getAdminUsage() {
 
 export async function getAdminInterest() {
   const resp = await apiFetch('/admin/interest');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function updateAdminFeature(flagId, data) {
+  const resp = await apiFetch(`/admin/features/${flagId}`, {
+    method: 'PUT',
+    body:   JSON.stringify(data),
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }

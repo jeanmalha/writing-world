@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest } from './api.js';
+import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest, getFeatures, updateAdminFeature } from './api.js';
 
 let _tab = 'users';
 
@@ -19,7 +19,8 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
         <button class="admin-tab${_tab === 'tiers'    ? ' active' : ''}" data-tab="tiers">Tiers</button>
         <button class="admin-tab${_tab === 'status'   ? ' active' : ''}" data-tab="status">Status</button>
         <button class="admin-tab${_tab === 'usage'    ? ' active' : ''}" data-tab="usage">Usage</button>
-        <button class="admin-tab${_tab === 'interest' ? ' active' : ''}" data-tab="interest">Interest</button>
+        <button class="admin-tab${_tab === 'interest'  ? ' active' : ''}" data-tab="interest">Interest</button>
+        <button class="admin-tab${_tab === 'features'  ? ' active' : ''}" data-tab="features">Features</button>
       </div>
     </div>`;
 
@@ -38,6 +39,7 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
     if (_tab === 'status')   await _renderStatus(entityList, detailContent);
     if (_tab === 'usage')    await _renderUsage(entityList);
     if (_tab === 'interest') await _renderInterest(entityList);
+    if (_tab === 'features') await _renderFeatures(entityList);
   } catch (err) {
     entityList.innerHTML = `<div class="empty-state">Error: ${_esc(err.message)}</div>`;
   }
@@ -369,6 +371,82 @@ async function _renderUsage(entityList) {
           </tr>`).join('')}
       </tbody>
     </table>`;
+}
+
+// ── Features tab ───────────────────────────────────────────────────────────
+
+async function _renderFeatures(entityList) {
+  const flags = await getFeatures();
+
+  const FLAG_META = {
+    assistant: {
+      label:       'Lore Assistant',
+      description: 'In-browser AI chat powered by a client-side LLM (experimental).',
+      extra: (f) => `
+        <div class="ff-row">
+          <span class="ff-key">Model</span>
+          <select class="ff-select" id="ff-assistant-model">
+            <option value="360M"${f.model === '360M' ? ' selected' : ''}>SmolLM2 360M — lighter, ~250 MB</option>
+            <option value="1.7B"${f.model === '1.7B' ? ' selected' : ''}>SmolLM2 1.7B — heavier, ~900 MB</option>
+          </select>
+        </div>`,
+      collect: () => ({ model: document.getElementById('ff-assistant-model')?.value }),
+    },
+  };
+
+  entityList.innerHTML = `<div class="ff-list">` +
+    Object.entries(flags).map(([id, flag]) => {
+      const meta    = FLAG_META[id] || {};
+      const enabled = flag.enabled !== false;
+      return `<div class="ff-card" data-flag="${_esc(id)}">
+        <div class="ff-header">
+          <span class="ff-label">${_esc(meta.label || id)}</span>
+          <div class="ff-toggle">
+            <button class="ff-btn${enabled  ? ' active' : ''}" data-ff-on="true">On</button>
+            <button class="ff-btn${!enabled ? ' active' : ''}" data-ff-on="false">Off</button>
+          </div>
+        </div>
+        <div class="ff-desc">${_esc(meta.description || '')}</div>
+        ${meta.extra ? meta.extra(flag) : ''}
+        <div class="ff-footer">
+          <span class="ff-msg" id="ff-msg-${_esc(id)}"></span>
+          <button class="ff-save" data-flag="${_esc(id)}">Save</button>
+        </div>
+      </div>`;
+    }).join('') + `</div>`;
+
+  // Wire toggle buttons
+  entityList.querySelectorAll('.ff-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.ff-card');
+      card.querySelectorAll('.ff-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Wire save buttons
+  entityList.querySelectorAll('.ff-save').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id   = btn.dataset.flag;
+      const card = entityList.querySelector(`.ff-card[data-flag="${id}"]`);
+      const on   = card.querySelector('.ff-btn[data-ff-on="true"]').classList.contains('active');
+      const meta = FLAG_META[id];
+      const extra = meta?.collect?.() || {};
+      const msg  = document.getElementById(`ff-msg-${id}`);
+      btn.disabled = true;
+      try {
+        await updateAdminFeature(id, { enabled: on, ...extra });
+        msg.textContent = '✓ Saved';
+        msg.style.color = 'var(--accent)';
+      } catch (e) {
+        msg.textContent = e.message;
+        msg.style.color = 'var(--danger)';
+      } finally {
+        btn.disabled = false;
+        setTimeout(() => { msg.textContent = ''; }, 3000);
+      }
+    });
+  });
 }
 
 // ── Interest tab ───────────────────────────────────────────────────────────

@@ -8,6 +8,8 @@ import { renderProjectView, renderSettingsView } from './project.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
 import { initTheme, getTheme, setTheme } from './theme.js';
+import { getFeatures } from './api.js';
+import { setAssistantModel } from './llm.js';
 
 // ── State ──────────────────────────────────────────────
 const state = {
@@ -863,6 +865,19 @@ async function init() {
   if (isAuthEnabled && window.location.search.includes('code=')) {
     await handleCallback().catch(console.error);
   }
+
+  // Apply feature flags before rendering
+  const features = await getFeatures();
+  const assistantFlag = features.assistant;
+  const assistantEnabled = assistantFlag?.enabled !== false;
+
+  if (!assistantEnabled) {
+    $('btn-chat-toggle').style.display = 'none';
+  }
+  if (assistantEnabled && assistantFlag?.model) {
+    setAssistantModel(assistantFlag.model);
+  }
+
   initSplash();
   initBoard(entityId => {
     const e = store.get(entityId);

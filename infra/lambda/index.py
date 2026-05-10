@@ -18,6 +18,7 @@ USAGE_TABLE          = os.environ.get('USAGE_TABLE', '')
 TIERS_TABLE          = os.environ.get('TIERS_TABLE', '')
 USER_POOL_ID         = os.environ.get('USER_POOL_ID', '')
 ATHENA_RESULTS_BUCKET = os.environ.get('ATHENA_RESULTS_BUCKET', '')
+FEATURES_TABLE        = os.environ.get('FEATURES_TABLE', '')
 SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS     = 2000
@@ -30,6 +31,16 @@ def resolve_model(mode):
 # ── Tier system ───────────────────────────────────────────────────────────────
 
 TIER_PRIORITY = {'uncharted': 3, 'trailblazer': 2, 'explorer': 1}
+
+FEATURE_DEFAULTS = {
+    'assistant': {
+        'flagId':      'assistant',
+        'label':       'Lore Assistant',
+        'description': 'In-browser AI chat (experimental, client-side model)',
+        'enabled':     True,
+        'model':       '360M',  # '360M' | '1.7B'
+    },
+}
 
 TIER_DEFAULTS = {
     'explorer':    {'model': 'simple',  'dailyLimit': 50_000,    'weeklyLimit': 200_000,   'monthlyLimit': 500_000},
@@ -164,6 +175,10 @@ def handler(event, context):
     method = ctx.get('method', '')
     path   = ctx.get('path', '').rstrip('/')
 
+    if method == 'GET'  and path.endswith('/features'):
+        return get_features()
+    if method == 'PUT'  and '/admin/features/' in path:
+        return admin_update_feature(event, path.split('/')[-1])
     if method == 'POST' and path.endswith('/interest'):
         return handle_interest(event)
     if method == 'GET'  and path.endswith('/world'):
@@ -576,6 +591,51 @@ def admin_update_tier(event, tier_id):
         'weeklyLimit':  weekly,
         'monthlyLimit': monthly,
     })
+    return out(200, {'ok': True})
+
+
+# ── Feature flags ─────────────────────────────────────────────────────────────
+
+def _load_flag(flag_id):
+    defaults = FEATURE_DEFAULTS[flag_id]
+    if not FEATURES_TABLE:
+        return dict(defaults)
+    try:
+        item = ddb.Table(FEATURES_TABLE).get_item(Key={'flagId': flag_id}).get('Item')
+        if not item:
+            return dict(defaults)
+        flag = dict(defaults)
+        flag['enabled'] = bool(item.get('enabled', defaults['enabled']))
+        for k in defaults:
+            if k not in ('flagId', 'label', 'description', 'enabled'):
+                flag[k] = item.get(k, defaults[k])
+        return flag
+    except Exception:
+        return dict(defaults)
+
+def get_features():
+    return out(200, {fid: _load_flag(fid) for fid in FEATURE_DEFAULTS})
+
+def admin_update_feature(event, flag_id):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if flag_id not in FEATURE_DEFAULTS:
+        return out(404, {'error': f'Unknown flag: {flag_id}'})
+    if not FEATURES_TABLE:
+        return out(500, {'error': 'FEATURES_TABLE not configured'})
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(400, {'error': 'invalid JSON'})
+
+    defaults = FEATURE_DEFAULTS[flag_id]
+    item = {'flagId': flag_id, 'enabled': bool(body.get('enabled', defaults['enabled']))}
+    for k, v in defaults.items():
+        if k not in ('flagId', 'label', 'description', 'enabled'):
+            raw = body.get(k, v)
+            item[k] = str(raw) if raw is not None else str(v)
+
+    ddb.Table(FEATURES_TABLE).put_item(Item=item)
     return out(200, {'ok': True})
 
 
