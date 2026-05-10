@@ -690,6 +690,8 @@ body {
 }
 #ai-textarea {
   flex: 1;
+  min-height: 100px;
+  max-height: 200px;
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--panel-border);
