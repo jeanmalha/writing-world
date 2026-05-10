@@ -1,6 +1,6 @@
 import { store, TYPES, TYPE_FIELDS } from './store.js';
 import { initSplash, showSplash } from './splash.js';
-import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail, isAdmin } from './auth.js';
+import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail, getUserSub, isAdmin } from './auth.js';
 import { renderAiView } from './ai-panel.js';
 import { renderAdminView } from './admin.js';
 import { initChat, wireChat, toggleChat, isChatOpen } from './chat.js';
@@ -653,8 +653,22 @@ function updateStatus() {
 // ── Cloud sync ──────────────────────────────────────────
 let _cloudSaveTimer = null;
 
+const LAST_USER_KEY = 'lore_last_user_sub';
+
 async function initCloudSync() {
   if (!isAuthenticated()) return;
+
+  // If a different user is now logged in, wipe the previous user's local data
+  // so we never accidentally push User A's lore to User B's cloud.
+  const currentSub = getUserSub();
+  const lastSub    = localStorage.getItem(LAST_USER_KEY);
+  if (currentSub && lastSub && currentSub !== lastSub) {
+    store.clearLocalData();
+    state.selectedId = null;
+    state.editing    = false;
+    renderAll();
+  }
+  if (currentSub) localStorage.setItem(LAST_USER_KEY, currentSub);
 
   // Load cloud world and resolve conflicts
   try {

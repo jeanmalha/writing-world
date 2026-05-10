@@ -504,6 +504,12 @@ export const store = {
 
   onPersist(fn) { _persistCallbacks.push(fn); },
 
+  clearLocalData() {
+    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem(SNAP_KEY);
+    _data = _defaultData();
+  },
+
   exportData() { return JSON.parse(JSON.stringify(_data)); },
 
   loadData(data) {

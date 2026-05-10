@@ -83,6 +83,13 @@ export function getUserEmail() {
   } catch { return null; }
 }
 
+export function getUserSub() {
+  try {
+    const payload = JSON.parse(atob(localStorage.getItem(LS.ID)?.split('.')[1] || ''));
+    return payload.sub || null;
+  } catch { return null; }
+}
+
 export function isAdmin() {
   try {
     const token = localStorage.getItem(LS.ACCESS);
