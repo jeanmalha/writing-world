@@ -74,36 +74,49 @@ info "Uploading @huggingface/transformers@$TFM_VER …"
 upload_js "$TFM_PKG/dist/transformers.web.min.js" "vendor/transformers/transformers.web.min.js"
 success "Transformers.js uploaded."
 
-# ── onnxruntime-web — WASM backends ───────────────────────────────────────────
-info "Uploading onnxruntime-web@$ORT_VER WASM files…"
+# ── onnxruntime-web — JS bundles (importmap) + WASM binaries ──────────────────
+info "Uploading onnxruntime-web@$ORT_VER …"
 
-# WebGPU backend (jsep = JS Execution Provider)
+# JS bundle for onnxruntime-web/webgpu (only subpath Transformers.js imports)
+upload_js "$ORT_PKG/dist/ort.webgpu.bundle.min.mjs" "vendor/ort-web/ort.webgpu.bundle.min.mjs"
+
+# WASM binaries loaded at runtime via env.backends.onnx.wasm.wasmPaths
 upload_js   "$ORT_PKG/dist/ort-wasm-simd-threaded.jsep.mjs"  "vendor/ort-web/ort-wasm-simd-threaded.jsep.mjs"
 upload_wasm "$ORT_PKG/dist/ort-wasm-simd-threaded.jsep.wasm" "vendor/ort-web/ort-wasm-simd-threaded.jsep.wasm"
+upload_js   "$ORT_PKG/dist/ort-wasm-simd-threaded.mjs"       "vendor/ort-web/ort-wasm-simd-threaded.mjs"
+upload_wasm "$ORT_PKG/dist/ort-wasm-simd-threaded.wasm"      "vendor/ort-web/ort-wasm-simd-threaded.wasm"
 
-# Pure WASM fallback
-upload_js   "$ORT_PKG/dist/ort-wasm-simd-threaded.mjs"  "vendor/ort-web/ort-wasm-simd-threaded.mjs"
-upload_wasm "$ORT_PKG/dist/ort-wasm-simd-threaded.wasm" "vendor/ort-web/ort-wasm-simd-threaded.wasm"
+success "ORT files uploaded."
 
-success "ORT WASM files uploaded."
-
-# ── Report ─────────────────────────────────────────────────────────────────────
+# ── Patch index.html importmap ────────────────────────────────────────────────
 TFM_URL="https://${DOMAIN}/vendor/transformers/transformers.web.min.js"
-ORT_URL="https://${DOMAIN}/vendor/ort-web/"
+ORT_WEBGPU_URL="https://${DOMAIN}/vendor/ort-web/ort.webgpu.bundle.min.mjs"
 
-echo ""
-success "All vendor files uploaded."
-echo ""
-echo "  Transformers.js: $TFM_URL"
-echo "  ORT WASM root:   $ORT_URL"
-echo ""
-echo "Importmap entry:"
-echo "  \"@huggingface/transformers\": \"$TFM_URL\""
-echo ""
+IMPORTMAP=$(cat <<IMAP
+    "imports": {
+      "@huggingface/transformers": "${TFM_URL}",
+      "onnxruntime-web/webgpu":    "${ORT_WEBGPU_URL}"
+    }
+IMAP
+)
 
-# ── Patch index.html importmap in-place ───────────────────────────────────────
-ESCAPED_URL=$(echo "$TFM_URL" | sed 's/[\/&]/\\&/g')
-sed -i '' "s|\"@mlc-ai/web-llm\".*|\"@huggingface/transformers\": \"${ESCAPED_URL}\"|" "$APP_DIR/index.html"
+# Replace everything between the outer braces of the importmap
+python3 - "$APP_DIR/index.html" <<PYEOF
+import re, sys
+path = sys.argv[1]
+html = open(path).read()
+new_map = '''${IMPORTMAP}'''
+html = re.sub(
+    r'("imports"\s*:\s*\{)[^}]*(})',
+    lambda m: new_map,
+    html, flags=re.DOTALL
+)
+open(path, 'w').write(html)
+PYEOF
+
 success "index.html importmap updated."
+echo ""
+echo "  Transformers.js:        $TFM_URL"
+echo "  onnxruntime-web/webgpu: $ORT_WEBGPU_URL"
 echo ""
 warn "Run ./infra/deploy.sh sync to push the updated index.html."
