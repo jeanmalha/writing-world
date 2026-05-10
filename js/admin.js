@@ -12,7 +12,7 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
   }
 
   listHeader.innerHTML = `
-    <div class="list-header-row">
+    <div class="admin-header">
       <span class="list-title">Admin</span>
       <div class="admin-tabs">
         <button class="admin-tab${_tab === 'users'    ? ' active' : ''}" data-tab="users">Users</button>

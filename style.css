@@ -202,7 +202,7 @@ body {
   flex-shrink: 0;
   min-height: 38px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .list-header-row {
@@ -2000,16 +2000,22 @@ body.board-mode #board-panel {
 #btn-chat-toggle.active { color: #34d399; }
 
 /* ── Admin ─────────────────────────────────────────── */
-.admin-tabs { display: flex; gap: 4px; }
+.admin-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.admin-tabs { display: flex; gap: 3px; flex-wrap: wrap; }
 .admin-tab {
   background: transparent;
   border: 1px solid var(--panel-border);
   color: var(--text-muted);
   font-family: inherit;
-  font-size: 0.72rem;
-  padding: 2px 10px;
+  font-size: 0.68rem;
+  padding: 2px 7px;
   cursor: pointer;
-  letter-spacing: .05em;
+  letter-spacing: .04em;
 }
 .admin-tab.active { border-color: var(--accent); color: var(--accent); }
 .admin-tab:hover:not(.active) { color: var(--text); }
