@@ -1837,6 +1837,23 @@ body.board-mode #board-panel {
   padding: 1px 5px;
   border-radius: 2px;
 }
+.chat-experimental-badge {
+  font-size: .6rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+  padding: 1px 5px;
+  border-radius: 2px;
+  opacity: .8;
+}
+.btn-exp-badge {
+  font-size: .6rem;
+  letter-spacing: .04em;
+  color: var(--warning);
+  opacity: .7;
+  vertical-align: middle;
+}
 #chat-header-actions { display: flex; gap: 4px; }
 #chat-clear, #chat-close {
   background: transparent;
