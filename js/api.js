@@ -76,6 +76,26 @@ export async function saveWorld(data) {
   return resp.json();   // { updatedAt }
 }
 
+export async function setAdminUserTier(username, tier) {
+  const resp = await apiFetch(`/admin/users/${encodeURIComponent(username)}/tier`, {
+    method: 'PUT',
+    body:   JSON.stringify({ tier: tier || '' }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+export async function setAdminUserAdmin(username, admin) {
+  const resp = await apiFetch(`/admin/users/${encodeURIComponent(username)}/admin-role`, {
+    method: 'PUT',
+    body:   JSON.stringify({ admin }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
 export async function deleteAdminUser(email) {
   const resp = await apiFetch(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
   const data = await resp.json();

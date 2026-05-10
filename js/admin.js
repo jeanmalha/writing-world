@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, deleteAdminUser, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier } from './api.js';
+import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier } from './api.js';
 
 let _tab = 'users';
 
@@ -43,68 +43,73 @@ export async function renderAdminView(listHeader, entityList, detailContent) {
 
 // ── Users tab ──────────────────────────────────────────────────────────────
 
+const TIER_LABELS   = { explorer: 'Explorer', trailblazer: 'Trailblazer', uncharted: 'Uncharted' };
+const TIER_GROUPS   = ['explorer', 'trailblazer', 'uncharted'];
+let _selectedEmail  = null;
+
 async function _renderUsers(entityList, detailContent) {
   const { users } = await getAdminUsers();
+  _renderUserList(entityList, detailContent, users);
+  _renderUserDetailOrCreate(detailContent, users, entityList);
+}
 
-  if (!users.length) {
-    entityList.innerHTML = '<div class="empty-state">No users found.</div>';
-  } else {
-    entityList.innerHTML = `
-      <table class="admin-table">
-        <thead><tr><th>Email</th><th>Status</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          ${users.map(u => `
-            <tr>
-              <td>${_esc(u.email)}</td>
-              <td><span class="admin-badge admin-badge-${u.status.toLowerCase()}">${_esc(u.status)}</span></td>
-              <td>${u.created ? new Date(u.created).toLocaleDateString() : '—'}</td>
-              <td><button class="admin-delete-user-btn" data-email="${_esc(u.email)}" title="Delete user">✕</button></td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
+function _renderUserList(entityList, detailContent, users) {
+  entityList.innerHTML = `
+    <div class="admin-user-list-header">
+      <button class="admin-new-user-btn" id="btn-admin-new-user">+ New User</button>
+    </div>
+    ${users.length === 0 ? '<div class="empty-state">No users yet.</div>' : users.map(u => {
+      const tier    = u.groups.find(g => TIER_GROUPS.includes(g));
+      const isAdm   = u.groups.includes('admins');
+      const sel     = u.email === _selectedEmail;
+      return `<div class="admin-user-row${sel ? ' selected' : ''}" data-email="${_esc(u.email)}">
+        <div class="admin-user-row-email">${_esc(u.email)}</div>
+        <div class="admin-user-row-badges">
+          ${tier ? `<span class="admin-tier-pill admin-tier-${tier}">${_esc(TIER_LABELS[tier])}</span>` : '<span class="admin-tier-pill admin-tier-none">—</span>'}
+          ${isAdm ? '<span class="admin-admin-pill">admin</span>' : ''}
+        </div>
+      </div>`;
+    }).join('')}`;
+
+  entityList.querySelector('#btn-admin-new-user')?.addEventListener('click', () => {
+    _selectedEmail = null;
+    entityList.querySelectorAll('.admin-user-row').forEach(r => r.classList.remove('selected'));
+    _renderCreateForm(detailContent, entityList, users);
+  });
+
+  entityList.querySelectorAll('.admin-user-row').forEach(row => {
+    row.addEventListener('click', () => {
+      _selectedEmail = row.dataset.email;
+      entityList.querySelectorAll('.admin-user-row').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
+      const user = users.find(u => u.email === _selectedEmail);
+      if (user) _renderUserDetail(detailContent, user, entityList, users);
+    });
+  });
+
+  // Re-select previously selected user if still in list
+  if (_selectedEmail) {
+    const user = users.find(u => u.email === _selectedEmail);
+    if (user) _renderUserDetail(detailContent, user, entityList, users);
   }
+}
 
+function _renderUserDetailOrCreate(detailContent, users, entityList) {
+  if (_selectedEmail) return; // already rendered by row click
+  _renderCreateForm(detailContent, entityList, users);
+}
+
+function _renderCreateForm(detailContent, entityList, users) {
   detailContent.innerHTML = `
     <div class="admin-create-panel">
-      <div class="admin-create-title">Create User</div>
-      <div class="admin-create-note">Cognito will send a temporary password via email.</div>
+      <div class="admin-create-title">New User</div>
+      <div class="admin-create-note">Cognito will send a temporary password to their email.</div>
       <div class="admin-create-form">
         <input id="admin-email-input" type="email" placeholder="user@example.com" autocomplete="off">
         <button id="admin-create-btn">Create</button>
       </div>
       <div id="admin-create-msg" class="admin-create-msg"></div>
     </div>`;
-
-  const refreshTable = async () => {
-    const { users: updated } = await getAdminUsers();
-    entityList.querySelector('tbody').innerHTML = updated.map(u => `
-      <tr>
-        <td>${_esc(u.email)}</td>
-        <td><span class="admin-badge admin-badge-${u.status.toLowerCase()}">${_esc(u.status)}</span></td>
-        <td>${u.created ? new Date(u.created).toLocaleDateString() : '—'}</td>
-        <td><button class="admin-delete-user-btn" data-email="${_esc(u.email)}" title="Delete user">✕</button></td>
-      </tr>`).join('');
-    wireDeleteButtons();
-  };
-
-  const wireDeleteButtons = () => {
-    entityList.querySelectorAll('.admin-delete-user-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const email = btn.dataset.email;
-        if (!confirm(`Delete user ${email}? This cannot be undone.`)) return;
-        btn.disabled = true;
-        try {
-          await deleteAdminUser(email);
-          await refreshTable();
-        } catch (err) {
-          alert(`Failed: ${err.message}`);
-          btn.disabled = false;
-        }
-      });
-    });
-  };
-
-  wireDeleteButtons();
 
   const input = detailContent.querySelector('#admin-email-input');
   const btn   = detailContent.querySelector('#admin-create-btn');
@@ -117,10 +122,11 @@ async function _renderUsers(entityList, detailContent) {
     msg.textContent = '';
     try {
       await createAdminUser(email);
-      msg.textContent = `✓ Created ${email}`;
+      msg.textContent = `✓ Invited ${email}`;
       msg.className   = 'admin-create-msg admin-msg-ok';
       input.value     = '';
-      await refreshTable();
+      const { users: updated } = await getAdminUsers();
+      _renderUserList(entityList, detailContent, updated);
     } catch (err) {
       msg.textContent = `✗ ${err.message}`;
       msg.className   = 'admin-create-msg admin-msg-err';
@@ -131,6 +137,90 @@ async function _renderUsers(entityList, detailContent) {
   btn.addEventListener('click', doCreate);
   input.addEventListener('keydown', e => { if (e.key === 'Enter') doCreate(); });
   input.focus();
+}
+
+function _renderUserDetail(detailContent, user, entityList, users) {
+  const tier   = user.groups.find(g => TIER_GROUPS.includes(g)) || '';
+  const isAdm  = user.groups.includes('admins');
+
+  detailContent.innerHTML = `
+    <div class="admin-user-detail">
+      <div class="admin-user-detail-email">${_esc(user.email)}</div>
+      <div class="admin-user-detail-meta">
+        <span class="admin-badge admin-badge-${user.status.toLowerCase()}">${_esc(user.status)}</span>
+        ${user.created ? `<span class="admin-user-joined">Joined ${new Date(user.created).toLocaleDateString()}</span>` : ''}
+      </div>
+
+      <div class="admin-user-section">
+        <div class="admin-user-section-label">TIER</div>
+        <div class="admin-tier-assign-row">
+          ${['', ...TIER_GROUPS].map(t => `
+            <button class="admin-tier-assign-btn${tier === t ? ' active' : ''}"
+                    data-tier="${t}" style="${t ? `--tc:${TIER_COLORS[t]}` : ''}">
+              ${t ? _esc(TIER_LABELS[t]) : 'None'}
+            </button>`).join('')}
+        </div>
+      </div>
+
+      <div class="admin-user-section">
+        <div class="admin-user-section-label">ADMIN ACCESS</div>
+        <button class="admin-role-btn${isAdm ? ' active' : ''}" id="btn-toggle-admin-role">
+          ${isAdm ? '✓ Admin — click to remove' : 'Grant admin access'}
+        </button>
+      </div>
+
+      <div class="admin-user-section">
+        <button class="admin-danger-btn" id="btn-delete-this-user">Delete user…</button>
+      </div>
+
+      <div class="admin-user-msg" id="admin-user-msg"></div>
+    </div>`;
+
+  const msg     = document.getElementById('admin-user-msg');
+  const refresh = async () => {
+    const { users: updated } = await getAdminUsers();
+    _renderUserList(entityList, detailContent, updated);
+    const updatedUser = updated.find(u => u.email === user.email);
+    if (updatedUser) _renderUserDetail(detailContent, updatedUser, entityList, updated);
+  };
+  const setMsg  = (text, ok) => {
+    msg.textContent = text;
+    msg.className   = `admin-user-msg ${ok ? 'admin-msg-ok' : 'admin-msg-err'}`;
+  };
+
+  // Tier buttons
+  detailContent.querySelectorAll('.admin-tier-assign-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (btn.classList.contains('active')) return;
+      btn.disabled = true;
+      try {
+        await setAdminUserTier(user.username || user.email, btn.dataset.tier);
+        setMsg(`✓ Tier set to ${btn.dataset.tier || 'none'} — user must re-login`, true);
+        await refresh();
+      } catch (err) { setMsg(`✗ ${err.message}`, false); btn.disabled = false; }
+    });
+  });
+
+  // Admin toggle
+  document.getElementById('btn-toggle-admin-role')?.addEventListener('click', async () => {
+    try {
+      await setAdminUserAdmin(user.username || user.email, !isAdm);
+      setMsg(`✓ Admin ${!isAdm ? 'granted' : 'removed'} — user must re-login`, true);
+      await refresh();
+    } catch (err) { setMsg(`✗ ${err.message}`, false); }
+  });
+
+  // Delete
+  document.getElementById('btn-delete-this-user')?.addEventListener('click', async () => {
+    if (!confirm(`Delete ${user.email}? This cannot be undone.`)) return;
+    try {
+      await deleteAdminUser(user.username || user.email);
+      _selectedEmail = null;
+      const { users: updated } = await getAdminUsers();
+      _renderUserList(entityList, detailContent, updated);
+      _renderCreateForm(detailContent, entityList, updated);
+    } catch (err) { setMsg(`✗ ${err.message}`, false); }
+  });
 }
 
 // ── Tiers tab ──────────────────────────────────────────────────────────────

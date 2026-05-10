@@ -186,6 +186,10 @@ def handler(event, context):
         return admin_create_user(event)
     if method == 'DELETE' and '/admin/users/' in path:
         return admin_delete_user(event, path.split('/')[-1])
+    if method == 'PUT'    and '/admin/users/' in path and path.endswith('/tier'):
+        return admin_set_user_tier(event, path.split('/')[-2])
+    if method == 'PUT'    and '/admin/users/' in path and path.endswith('/admin-role'):
+        return admin_set_user_admin_role(event, path.split('/')[-2])
     if method == 'GET'  and path.endswith('/admin/status'):
         return admin_status(event)
     if method == 'GET'  and path.endswith('/admin/usage'):
@@ -285,6 +289,25 @@ def admin_list_users(event):
     if not USER_POOL_ID:
         return out(500, {'error': 'USER_POOL_ID not configured'})
 
+    # Build username→groups map via ListUsersInGroup (one call per group)
+    group_membership = {}  # username → [group, ...]
+    for group in ('admins', 'explorer', 'trailblazer', 'uncharted'):
+        nt = None
+        while True:
+            kwargs = {'UserPoolId': USER_POOL_ID, 'GroupName': group, 'Limit': 60}
+            if nt:
+                kwargs['NextToken'] = nt
+            try:
+                resp = cognito.list_users_in_group(**kwargs)
+            except cognito.exceptions.ResourceNotFoundException:
+                break
+            for u in resp.get('Users', []):
+                username = u.get('Username', '')
+                group_membership.setdefault(username, []).append(group)
+            nt = resp.get('NextToken')
+            if not nt:
+                break
+
     users, pt = [], None
     while True:
         kwargs = {'UserPoolId': USER_POOL_ID, 'Limit': 60}
@@ -292,18 +315,22 @@ def admin_list_users(event):
             kwargs['PaginationToken'] = pt
         resp = cognito.list_users(**kwargs)
         for u in resp.get('Users', []):
-            attrs = {a['Name']: a['Value'] for a in u.get('Attributes', [])}
+            attrs    = {a['Name']: a['Value'] for a in u.get('Attributes', [])}
+            username = u.get('Username', '')
             users.append({
-                'sub':     attrs.get('sub', ''),
-                'email':   attrs.get('email', ''),
-                'status':  u.get('UserStatus', ''),
-                'enabled': u.get('Enabled', True),
-                'created': u['UserCreateDate'].isoformat() if u.get('UserCreateDate') else '',
+                'username': username,
+                'sub':      attrs.get('sub', ''),
+                'email':    attrs.get('email', username),
+                'status':   u.get('UserStatus', ''),
+                'enabled':  u.get('Enabled', True),
+                'created':  u['UserCreateDate'].isoformat() if u.get('UserCreateDate') else '',
+                'groups':   group_membership.get(username, []),
             })
         pt = resp.get('PaginationToken')
         if not pt:
             break
 
+    users.sort(key=lambda u: u['email'])
     return out(200, {'users': users})
 
 
@@ -337,6 +364,59 @@ def admin_create_user(event):
         return out(409, {'error': 'User already exists'})
     except Exception as e:
         return out(500, {'error': str(e)})
+
+
+def admin_set_user_tier(event, username):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(400, {'error': 'invalid JSON'})
+
+    tier = body.get('tier') or ''
+    if tier and tier not in TIER_DEFAULTS:
+        return out(400, {'error': f'Unknown tier: {tier}'})
+
+    # Remove from all tier groups first (ignore errors if not a member)
+    for t in ('explorer', 'trailblazer', 'uncharted'):
+        try:
+            cognito.admin_remove_user_from_group(UserPoolId=USER_POOL_ID, Username=username, GroupName=t)
+        except Exception:
+            pass
+
+    if tier:
+        try:
+            cognito.admin_add_user_to_group(UserPoolId=USER_POOL_ID, Username=username, GroupName=tier)
+        except Exception as e:
+            return out(500, {'error': str(e)})
+
+    return out(200, {'ok': True})
+
+
+def admin_set_user_admin_role(event, username):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+
+    caller = event['requestContext']['authorizer']['jwt']['claims'].get('email', '')
+    if caller and caller.lower() == username.lower():
+        return out(400, {'error': 'Cannot modify your own admin status'})
+
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(400, {'error': 'invalid JSON'})
+
+    make_admin = bool(body.get('admin', False))
+    try:
+        if make_admin:
+            cognito.admin_add_user_to_group(UserPoolId=USER_POOL_ID, Username=username, GroupName='admins')
+        else:
+            cognito.admin_remove_user_from_group(UserPoolId=USER_POOL_ID, Username=username, GroupName='admins')
+    except Exception as e:
+        return out(500, {'error': str(e)})
+
+    return out(200, {'ok': True})
 
 
 def admin_delete_user(event, username):

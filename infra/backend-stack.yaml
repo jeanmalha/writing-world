@@ -250,8 +250,11 @@ Resources:
                 Action:
                   - cognito-idp:ListUsers
                   - cognito-idp:AdminCreateUser
-                  - cognito-idp:AdminGetUser
                   - cognito-idp:AdminDeleteUser
+                  - cognito-idp:AdminListGroupsForUser
+                  - cognito-idp:AdminAddUserToGroup
+                  - cognito-idp:AdminRemoveUserFromGroup
+                  - cognito-idp:ListUsersInGroup
                 Resource: !GetAtt UserPool.Arn
               - Effect: Allow
                 Action: lambda:InvokeFunction
@@ -471,6 +474,24 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/status
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PutAdminUserTierRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'PUT /admin/users/{username}/tier'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PutAdminUserAdminRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'PUT /admin/users/{username}/admin-role'
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

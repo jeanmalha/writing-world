@@ -1755,6 +1755,108 @@ body.board-mode #board-panel {
 .admin-badge-force_change_password { background: color-mix(in srgb, #facc15 15%, transparent); color: #facc15; }
 .admin-badge-unconfirmed  { background: color-mix(in srgb, #f87171 15%, transparent); color: #f87171; }
 
+.admin-user-list-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.admin-new-user-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: .72rem;
+  padding: 3px 12px;
+  cursor: pointer;
+  letter-spacing: .04em;
+}
+.admin-new-user-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.admin-user-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--panel-border) 40%, transparent);
+}
+.admin-user-row:hover { background: var(--hover-bg); }
+.admin-user-row.selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.admin-user-row-email  { font-size: .8rem; color: var(--text); }
+.admin-user-row-badges { display: flex; gap: 4px; align-items: center; }
+
+.admin-tier-pill {
+  font-size: .62rem;
+  letter-spacing: .06em;
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+.admin-tier-none        { color: var(--text-muted); background: transparent; }
+.admin-tier-explorer    { background: color-mix(in srgb, #60a5fa 15%, transparent); color: #60a5fa; }
+.admin-tier-trailblazer { background: color-mix(in srgb, #a78bfa 15%, transparent); color: #a78bfa; }
+.admin-tier-uncharted   { background: color-mix(in srgb, #f59e0b 15%, transparent); color: #f59e0b; }
+.admin-admin-pill {
+  font-size: .62rem;
+  letter-spacing: .06em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, #f87171 15%, transparent);
+  color: #f87171;
+}
+
+.admin-user-detail { padding: 1.2rem; display: flex; flex-direction: column; gap: 1.2rem; }
+.admin-user-detail-email { font-size: .95rem; color: var(--text); letter-spacing: .02em; }
+.admin-user-detail-meta  { display: flex; align-items: center; gap: 8px; }
+.admin-user-joined { font-size: .72rem; color: var(--text-muted); }
+.admin-user-section { display: flex; flex-direction: column; gap: 6px; }
+.admin-user-section-label {
+  font-size: .62rem;
+  letter-spacing: .1em;
+  color: var(--text-muted);
+}
+.admin-tier-assign-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.admin-tier-assign-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: .72rem;
+  padding: 3px 12px;
+  cursor: pointer;
+  letter-spacing: .04em;
+}
+.admin-tier-assign-btn:hover:not(.active):not(:disabled) { color: var(--text); }
+.admin-tier-assign-btn.active {
+  border-color: var(--tc, var(--accent));
+  color: var(--tc, var(--accent));
+}
+.admin-role-btn {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: .75rem;
+  padding: 5px 14px;
+  cursor: pointer;
+  text-align: left;
+}
+.admin-role-btn:hover { border-color: var(--accent); color: var(--accent); }
+.admin-role-btn.active { border-color: #f87171; color: #f87171; }
+.admin-danger-btn {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, #f87171 40%, transparent);
+  color: #f87171;
+  font-family: inherit;
+  font-size: .72rem;
+  padding: 4px 14px;
+  cursor: pointer;
+  opacity: .7;
+  width: fit-content;
+}
+.admin-danger-btn:hover { opacity: 1; }
+.admin-user-msg { font-size: .75rem; min-height: 1.2em; }
+
 .admin-delete-user-btn {
   background: transparent;
   border: none;
