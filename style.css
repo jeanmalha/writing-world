@@ -898,6 +898,30 @@ body {
 
 .saves-list { flex: 1; overflow-y: auto; padding: 2px 0; }
 
+.saves-io {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--panel-border);
+  flex-shrink: 0;
+}
+.saves-io button,
+.saves-io .btn-file {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 7px 12px;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+.saves-io button:last-child,
+.saves-io .btn-file:last-child { border-bottom: none; }
+.saves-io button:hover,
+.saves-io .btn-file:hover { color: var(--text); background: var(--hover-bg); }
+
 .saves-empty {
   text-align: center;
   color: var(--text-muted);

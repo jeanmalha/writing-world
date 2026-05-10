@@ -16,7 +16,7 @@ import { pipeline, TextStreamer, env } from '@huggingface/transformers';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const MODEL_ID = 'HuggingFaceTB/SmolLM2-1.7B-Instruct';
+const MODEL_ID = 'Xenova/SmolLM2-1.7B-Instruct';
 
 // WASM binaries sit alongside the bundle at /vendor/; ORT resolves them via
 // import.meta.url. Explicit wasmPaths ensures the right directory is used

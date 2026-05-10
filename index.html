@@ -31,15 +31,17 @@
         <button id="btn-do-save">Save</button>
       </div>
       <div id="saves-list-inner" class="saves-list"></div>
+      <div class="saves-io">
+        <button id="btn-export">&#8593; Export JSON</button>
+        <label class="btn-file">
+          &#8595; Import JSON
+          <input type="file" id="import-file" accept=".json" />
+        </label>
+      </div>
     </div>
     <div class="sidebar-footer">
-      <button id="btn-export">&#8593; Export JSON</button>
-      <label class="btn-file">
-        &#8595; Import JSON
-        <input type="file" id="import-file" accept=".json" />
-      </label>
-      <button id="btn-saves">&#9632; Saves</button>
       <button id="btn-chat-toggle">◎ Assistant</button>
+      <button id="btn-saves">&#9632; Saves</button>
       <button id="btn-about">◈ About Lore</button>
       <div id="auth-status"></div>
     </div>
