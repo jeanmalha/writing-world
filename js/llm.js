@@ -18,10 +18,11 @@ import { pipeline, TextStreamer, env } from '@huggingface/transformers';
 
 const MODEL_ID = 'HuggingFaceTB/SmolLM2-1.7B-Instruct';
 
-// Point ONNX Runtime WASM to our self-hosted files so no external CDN is used.
-// In local dev (localhost) the WASM falls back to Transformers.js defaults.
+// WASM binaries sit alongside the bundle at /vendor/; ORT resolves them via
+// import.meta.url. Explicit wasmPaths ensures the right directory is used
+// even if ORT's heuristics pick the wrong base URL.
 if (window.location.hostname !== 'localhost') {
-  env.backends.onnx.wasm.wasmPaths = '/vendor/ort-web/';
+  env.backends.onnx.wasm.wasmPaths = '/vendor/';
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
