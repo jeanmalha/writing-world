@@ -93,10 +93,11 @@ upload_js "$WORK/ort-webgpu.mjs" "ort-webgpu.mjs"
 
 # WASM binaries must sit at /vendor/ (same dir as the bundle) so ORT's
 # import.meta.url-based resolution finds them automatically.
-upload_wasm "$ORT/ort-wasm-simd-threaded.wasm"      "ort-wasm-simd-threaded.wasm"
-upload_wasm "$ORT/ort-wasm-simd-threaded.jsep.wasm" "ort-wasm-simd-threaded.jsep.wasm"
-upload_js   "$ORT/ort-wasm-simd-threaded.mjs"       "ort-wasm-simd-threaded.mjs"
-upload_js   "$ORT/ort-wasm-simd-threaded.jsep.mjs"  "ort-wasm-simd-threaded.jsep.mjs"
+# Upload all four WASM variant pairs (ORT picks the right one at runtime)
+for variant in "" ".jsep" ".asyncify" ".jspi"; do
+  upload_js   "$ORT/ort-wasm-simd-threaded${variant}.mjs"  "ort-wasm-simd-threaded${variant}.mjs"
+  upload_wasm "$ORT/ort-wasm-simd-threaded${variant}.wasm" "ort-wasm-simd-threaded${variant}.wasm"
+done
 
 success "All files uploaded."
 
