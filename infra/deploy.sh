@@ -4,6 +4,7 @@
 #   ./infra/deploy.sh          # first deploy (creates stack)
 #   ./infra/deploy.sh update   # subsequent deploys (update stack + sync files)
 #   ./infra/deploy.sh sync     # sync files only (stack already up to date)
+#   ./infra/deploy.sh sync --smoke   # sync + run smoke tests after
 
 set -euo pipefail
 
@@ -31,6 +32,8 @@ success() { echo -e "${GREEN}✓ $*${NC}"; }
 warn()    { echo -e "${YELLOW}⚠ $*${NC}"; }
 
 ACTION="${1:-deploy}"
+RUN_SMOKE=false
+for arg in "$@"; do [[ "$arg" == "--smoke" ]] && RUN_SMOKE=true; done
 
 # ── 1. Deploy / update CloudFormation stack ──────────
 if [[ "$ACTION" != "sync" ]]; then
@@ -146,20 +149,14 @@ INVALIDATION_ID=$(aws cloudfront create-invalidation \
 
 success "Invalidation created: $INVALIDATION_ID"
 
-# ── 6. Functional tests (optional) ───────────────────
+# ── 6. Functional tests (opt-in via --smoke) ─────────
 TESTS_SCRIPT="$(dirname "$0")/../tests/smoke.py"
-if python3 -c "import nova_act" 2>/dev/null && [[ -f "$TESTS_SCRIPT" ]] && [[ -n "${NOVA_ACT_API_KEY:-}" ]]; then
+if $RUN_SMOKE; then
   echo ""
   info "Waiting 20s for CloudFront invalidation to propagate…"
   sleep 20
   info "Running smoke tests against https://${DOMAIN} …"
   python3 "$TESTS_SCRIPT" --url "https://${DOMAIN}" || warn "Some smoke tests failed — see output above."
-else
-  if [[ -z "${NOVA_ACT_API_KEY:-}" ]]; then
-    warn "Skipping smoke tests (NOVA_ACT_API_KEY not set in deploy.env)."
-  elif ! python3 -c "import nova_act" 2>/dev/null; then
-    warn "Skipping smoke tests (nova-act not installed: pip install nova-act)."
-  fi
 fi
 
 # ── 7. Done ───────────────────────────────────────────
