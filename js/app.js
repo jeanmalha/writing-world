@@ -3,6 +3,7 @@ import { initSplash, showSplash } from './splash.js';
 import { isAuthEnabled, isAuthenticated, handleCallback, login, logout, getUserEmail, isAdmin } from './auth.js';
 import { renderAiView } from './ai-panel.js';
 import { renderAdminView } from './admin.js';
+import { initChat, wireChat, toggleChat, isChatOpen } from './chat.js';
 import { renderProjectView, renderSettingsView } from './project.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
@@ -102,6 +103,10 @@ function renderSidebar() {
   $('btn-ai')?.addEventListener('click', showAiPanel);
   $('btn-settings')?.addEventListener('click', showSettings);
   $('btn-admin')?.addEventListener('click', showAdmin);
+}
+
+function updateChatBtn() {
+  $('btn-chat-toggle')?.classList.toggle('active', isChatOpen());
 }
 
 function updateAuthStatus() {
@@ -630,6 +635,7 @@ function renderAll() {
   else                                   { renderList();     renderDetail(); }
   updateStatus();
   updateAuthStatus();
+  updateChatBtn();
 }
 
 let _cloudStatus = ''; // '' | 'saving' | 'synced' | 'error'
@@ -794,6 +800,10 @@ $('save-name-input').addEventListener('keydown', e => {
 
 // ── Init ────────────────────────────────────────────────
 $('btn-about')?.addEventListener('click', showSplash);
+$('btn-chat-toggle')?.addEventListener('click', () => toggleChat(state.selectedId));
+
+initChat();
+wireChat();
 $('btn-export').addEventListener('click', () => store.exportJSON());
 $('import-file').addEventListener('change', async e => {
   const file = e.target.files[0];

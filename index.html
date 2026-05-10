@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lore</title>
   <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "@mlc-ai/web-llm": "https://esm.sh/@mlc-ai/web-llm"
+    }
+  }
+  </script>
 </head>
 <body>
 
@@ -31,6 +38,7 @@
         <input type="file" id="import-file" accept=".json" />
       </label>
       <button id="btn-saves">&#9632; Saves</button>
+      <button id="btn-chat-toggle">◎ Assistant</button>
       <button id="btn-about">◈ About Lore</button>
       <div id="auth-status"></div>
     </div>
@@ -54,6 +62,27 @@
     <div class="board-modal-box">
       <button id="btn-board-modal-close">&#215;</button>
       <div id="board-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Chat panel (slide-out, independent of main view routing) -->
+  <div id="chat-overlay"></div>
+  <div id="chat-panel">
+    <div id="chat-header">
+      <div id="chat-header-title">
+        <span class="chat-header-icon">◎</span>
+        <span>Lore Assistant</span>
+        <span class="chat-header-badge">local · SmolLM2</span>
+      </div>
+      <div id="chat-header-actions">
+        <button id="chat-clear" title="Clear conversation">↺</button>
+        <button id="chat-close" title="Close">✕</button>
+      </div>
+    </div>
+    <div id="chat-body"></div>
+    <div id="chat-footer">
+      <textarea id="chat-input" placeholder="Ask about your lore…" rows="1" autocomplete="off" spellcheck="false"></textarea>
+      <button id="chat-send" title="Send (Enter)">↑</button>
     </div>
   </div>
 
