@@ -16,7 +16,7 @@ import { pipeline, TextStreamer, env } from '@huggingface/transformers';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const MODEL_ID = 'HuggingFaceTB/SmolLM2-1.7B-Instruct';
+const MODEL_ID = 'HuggingFaceTB/SmolLM2-360M-Instruct';
 
 // Point ORT WASM to our self-hosted binaries.
 if (window.location.hostname !== 'localhost') {

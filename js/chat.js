@@ -157,7 +157,7 @@ function _renderBody() {
       <div class="chat-progress-bar">
         <div class="chat-progress-fill" style="width:${pct}%"></div>
       </div>
-      <div class="chat-loading-sub">SmolLM2 1.7B · ~900 MB · cached after first load</div>
+      <div class="chat-loading-sub">SmolLM2 360M · ~250 MB · cached after first load</div>
     </div>`;
     return;
   }
