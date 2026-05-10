@@ -76,6 +76,13 @@ export async function saveWorld(data) {
   return resp.json();   // { updatedAt }
 }
 
+export async function deleteAdminUser(email) {
+  const resp = await apiFetch(`/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
 export async function getAdminTiers() {
   const resp = await apiFetch('/admin/tiers');
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

@@ -41,12 +41,7 @@ Resources:
         AllowAdminCreateUserOnly: true
         InviteMessageTemplate:
           EmailSubject: "You've been invited to Lore"
-          EmailMessage: |
-            <p>Hello,</p>
-            <p>You have been invited to <strong>Lore</strong>, a knowledge management tool for writers.</p>
-            <p>Your temporary password is: <strong>{####}</strong></p>
-            <p>Sign in at <a href="https://lore.malha.land">lore.malha.land</a> and you will be prompted to set a new password on first login.</p>
-            <p>— The Lore team</p>
+          EmailMessage: "<p>Hello {username},</p><p>You have been invited to <strong>Lore</strong>, a knowledge management tool for writers.</p><p>Your temporary password is: <strong>{####}</strong></p><p>Sign in at <a href=\"https://lore.malha.land\">lore.malha.land</a> — you will be prompted to set a new password on first login.</p><p>— The Lore team</p>"
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -256,6 +251,7 @@ Resources:
                   - cognito-idp:ListUsers
                   - cognito-idp:AdminCreateUser
                   - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminDeleteUser
                 Resource: !GetAtt UserPool.Arn
               - Effect: Allow
                 Action: lambda:InvokeFunction
@@ -344,6 +340,7 @@ Resources:
           - POST
           - GET
           - PUT
+          - DELETE
           - OPTIONS
         AllowHeaders:
           - authorization
@@ -474,6 +471,15 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/status
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  DeleteAdminUserRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'DELETE /admin/users/{username}'
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

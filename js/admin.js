@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier } from './api.js';
+import { getAdminUsers, createAdminUser, deleteAdminUser, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier } from './api.js';
 
 let _tab = 'users';
 
@@ -51,13 +51,14 @@ async function _renderUsers(entityList, detailContent) {
   } else {
     entityList.innerHTML = `
       <table class="admin-table">
-        <thead><tr><th>Email</th><th>Status</th><th>Created</th></tr></thead>
+        <thead><tr><th>Email</th><th>Status</th><th>Created</th><th></th></tr></thead>
         <tbody>
           ${users.map(u => `
             <tr>
               <td>${_esc(u.email)}</td>
               <td><span class="admin-badge admin-badge-${u.status.toLowerCase()}">${_esc(u.status)}</span></td>
               <td>${u.created ? new Date(u.created).toLocaleDateString() : '—'}</td>
+              <td><button class="admin-delete-user-btn" data-email="${_esc(u.email)}" title="Delete user">✕</button></td>
             </tr>`).join('')}
         </tbody>
       </table>`;
@@ -74,6 +75,37 @@ async function _renderUsers(entityList, detailContent) {
       <div id="admin-create-msg" class="admin-create-msg"></div>
     </div>`;
 
+  const refreshTable = async () => {
+    const { users: updated } = await getAdminUsers();
+    entityList.querySelector('tbody').innerHTML = updated.map(u => `
+      <tr>
+        <td>${_esc(u.email)}</td>
+        <td><span class="admin-badge admin-badge-${u.status.toLowerCase()}">${_esc(u.status)}</span></td>
+        <td>${u.created ? new Date(u.created).toLocaleDateString() : '—'}</td>
+        <td><button class="admin-delete-user-btn" data-email="${_esc(u.email)}" title="Delete user">✕</button></td>
+      </tr>`).join('');
+    wireDeleteButtons();
+  };
+
+  const wireDeleteButtons = () => {
+    entityList.querySelectorAll('.admin-delete-user-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const email = btn.dataset.email;
+        if (!confirm(`Delete user ${email}? This cannot be undone.`)) return;
+        btn.disabled = true;
+        try {
+          await deleteAdminUser(email);
+          await refreshTable();
+        } catch (err) {
+          alert(`Failed: ${err.message}`);
+          btn.disabled = false;
+        }
+      });
+    });
+  };
+
+  wireDeleteButtons();
+
   const input = detailContent.querySelector('#admin-email-input');
   const btn   = detailContent.querySelector('#admin-create-btn');
   const msg   = detailContent.querySelector('#admin-create-msg');
@@ -88,14 +120,7 @@ async function _renderUsers(entityList, detailContent) {
       msg.textContent = `✓ Created ${email}`;
       msg.className   = 'admin-create-msg admin-msg-ok';
       input.value     = '';
-      // Refresh list
-      const { users: updated } = await getAdminUsers();
-      entityList.querySelector('tbody').innerHTML = updated.map(u => `
-        <tr>
-          <td>${_esc(u.email)}</td>
-          <td><span class="admin-badge admin-badge-${u.status.toLowerCase()}">${_esc(u.status)}</span></td>
-          <td>${u.created ? new Date(u.created).toLocaleDateString() : '—'}</td>
-        </tr>`).join('');
+      await refreshTable();
     } catch (err) {
       msg.textContent = `✗ ${err.message}`;
       msg.className   = 'admin-create-msg admin-msg-err';

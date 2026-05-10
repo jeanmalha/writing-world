@@ -1755,6 +1755,17 @@ body.board-mode #board-panel {
 .admin-badge-force_change_password { background: color-mix(in srgb, #facc15 15%, transparent); color: #facc15; }
 .admin-badge-unconfirmed  { background: color-mix(in srgb, #f87171 15%, transparent); color: #f87171; }
 
+.admin-delete-user-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: .8rem;
+  padding: 2px 6px;
+}
+.admin-delete-user-btn:hover { color: #f87171; }
+.admin-delete-user-btn:disabled { opacity: .4; cursor: default; }
+
 .admin-uid {
   font-size: .72rem;
   color: var(--text-muted);

@@ -180,10 +180,12 @@ def handler(event, context):
         return start_job(event, 'analyze')
     if method == 'GET'  and '/analyze/' in path:
         return poll(path.split('/')[-1])
-    if method == 'GET'  and path.endswith('/admin/users'):
+    if method == 'GET'    and path.endswith('/admin/users'):
         return admin_list_users(event)
-    if method == 'POST' and path.endswith('/admin/users'):
+    if method == 'POST'   and path.endswith('/admin/users'):
         return admin_create_user(event)
+    if method == 'DELETE' and '/admin/users/' in path:
+        return admin_delete_user(event, path.split('/')[-1])
     if method == 'GET'  and path.endswith('/admin/status'):
         return admin_status(event)
     if method == 'GET'  and path.endswith('/admin/usage'):
@@ -333,6 +335,24 @@ def admin_create_user(event):
         return out(200, {'ok': True, 'email': email})
     except cognito.exceptions.UsernameExistsException:
         return out(409, {'error': 'User already exists'})
+    except Exception as e:
+        return out(500, {'error': str(e)})
+
+
+def admin_delete_user(event, username):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if not USER_POOL_ID:
+        return out(500, {'error': 'USER_POOL_ID not configured'})
+    # Prevent self-deletion
+    caller = event['requestContext']['authorizer']['jwt']['claims'].get('email', '')
+    if caller and caller.lower() == username.lower():
+        return out(400, {'error': 'Cannot delete your own account'})
+    try:
+        cognito.admin_delete_user(UserPoolId=USER_POOL_ID, Username=username)
+        return out(200, {'ok': True})
+    except cognito.exceptions.UserNotFoundException:
+        return out(404, {'error': 'User not found'})
     except Exception as e:
         return out(500, {'error': str(e)})
 
