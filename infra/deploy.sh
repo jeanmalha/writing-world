@@ -128,6 +128,12 @@ aws s3 cp "$BUILD_DIR/style.css" "s3://$BUCKET/style.css" \
   --cache-control "public, max-age=31536000, immutable" \
   --content-type "text/css"
 
+# Favicon — long cache; rarely changes
+aws s3 cp "$APP_DIR/favicon.svg" "s3://$BUCKET/favicon.svg" \
+  --profile "$PROFILE" \
+  --cache-control "public, max-age=604800" \
+  --content-type "image/svg+xml"
+
 # index.html — short cache; CloudFront invalidation keeps CDN fresh on deploy
 aws s3 cp "$BUILD_DIR/index.html" "s3://$BUCKET/index.html" \
   --profile "$PROFILE" \

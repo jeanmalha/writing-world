@@ -7,6 +7,7 @@ import { initChat, wireChat, toggleChat, isChatOpen } from './chat.js';
 import { renderProjectView, renderSettingsView } from './project.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
+import { initTheme, getTheme, setTheme } from './theme.js';
 
 // ── State ──────────────────────────────────────────────
 const state = {
@@ -815,6 +816,20 @@ $('save-name-input').addEventListener('keydown', e => {
 // ── Init ────────────────────────────────────────────────
 $('btn-about')?.addEventListener('click', showSplash);
 $('btn-chat-toggle')?.addEventListener('click', () => toggleChat(state.selectedId));
+
+// ── Theme toggle ─────────────────────────────────────────
+initTheme();
+
+function _syncThemeBtns() {
+  const t = getTheme();
+  ['light', 'system', 'dark'].forEach(k =>
+    $(`btn-theme-${k}`)?.classList.toggle('active', k === t));
+}
+
+['light', 'system', 'dark'].forEach(k =>
+  $(`btn-theme-${k}`)?.addEventListener('click', () => { setTheme(k); _syncThemeBtns(); }));
+
+_syncThemeBtns();
 
 initChat();
 wireChat();
