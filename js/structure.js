@@ -12,15 +12,30 @@ export function renderStructureView(listHeader, entityList, detailContent) {
   _listEl   = entityList;
   _detailEl = detailContent;
 
+  const emptyCount = store.getStructure()
+    .flatMap(a => a.chapters || [])
+    .filter(ch => !ch.title || ch.title === 'New Chapter').length;
+
   listHeader.innerHTML = `<div class="list-header-row">
     <span class="list-title">Structure</span>
-    <button class="btn-new" id="str-add-act">+ Act</button>
+    <div style="display:flex;gap:4px">
+      ${emptyCount ? `<button class="str-prune-btn" id="str-prune" title="Remove ${emptyCount} empty item${emptyCount !== 1 ? 's' : ''}">↻ Clean (${emptyCount})</button>` : ''}
+      <button class="btn-new" id="str-add-act">+ Act</button>
+    </div>
   </div>`;
 
   document.getElementById('str-add-act')?.addEventListener('click', () => {
     const act = store.addAct('New Act');
     _sel = { type: 'act', actId: act.id };
     _render();
+  });
+
+  document.getElementById('str-prune')?.addEventListener('click', () => {
+    if (confirm('Remove all empty acts, chapters and scenes (those with default "New…" titles and no content)?')) {
+      store.pruneStructure();
+      _sel = null;
+      _render();
+    }
   });
 
   _render();

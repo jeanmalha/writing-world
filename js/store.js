@@ -370,13 +370,21 @@ export const store = {
   // ── Import / Export ───────────────────────────────────
 
   exportJSON() {
-    // Export active project in v1-compatible format
     const proj = _proj();
+    const _isEmpty = s => !s || !s.trim() || s === 'New Act' || s === 'New Chapter' || s === 'New Scene';
+    const cleanStructure = (proj.structure || [])
+      .map(act => ({
+        ...act,
+        chapters: (act.chapters || [])
+          .map(ch => ({ ...ch, scenes: (ch.scenes || []).filter(sc => !_isEmpty(sc.title) || sc.description || (sc.links||[]).length) }))
+          .filter(ch => !_isEmpty(ch.title) || ch.description || (ch.scenes||[]).length || (ch.links||[]).length),
+      }))
+      .filter(act => !_isEmpty(act.title) || act.description || (act.chapters||[]).length);
     const out = {
       version:             1,
       entities:            proj.entities,
       project:             proj.metadata,
-      structure:           proj.structure,
+      structure:           cleanStructure,
       config:              proj.config,
       characterCategories: proj.characterCategories,
     };
@@ -594,6 +602,27 @@ export const store = {
     for (const e of Object.values(_proj().entities))
       if (e.categoryId === id) delete e.categoryId;
     persist(_data);
+  },
+
+  pruneStructure() {
+    const isEmpty = s => !s || !s.trim() || s === 'New Act' || s === 'New Chapter' || s === 'New Scene';
+    const proj = _proj();
+    proj.structure = (proj.structure || [])
+      .map(act => ({
+        ...act,
+        chapters: (act.chapters || [])
+          .map(ch => ({
+            ...ch,
+            scenes: (ch.scenes || []).filter(sc =>
+              !isEmpty(sc.title) || sc.description || (sc.links || []).length),
+          }))
+          .filter(ch =>
+            !isEmpty(ch.title) || ch.description || (ch.scenes || []).length || (ch.links || []).length),
+      }))
+      .filter(act =>
+        !isEmpty(act.title) || act.description || (act.chapters || []).length);
+    persist(_data);
+    return proj.structure.reduce((n, a) => n + (a.chapters || []).length, 0);
   },
 
   // ── Board positions ───────────────────────────────────

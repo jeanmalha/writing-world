@@ -2631,3 +2631,9 @@ body.board-mode #board-panel {
 }
 .ai-struct-checkbox input { cursor: pointer; }
 .ai-struct-inline { border-top: 1px solid var(--panel-border); margin-top: 12px; padding-top: 12px; }
+
+.str-prune-btn {
+  font-family: var(--font); font-size: 10px; padding: 3px 8px;
+  background: none; border: 1px solid var(--warning); color: var(--warning); cursor: pointer;
+}
+.str-prune-btn:hover { background: rgba(245,158,11,0.08); }
