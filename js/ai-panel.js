@@ -46,12 +46,30 @@ export function renderAiView(listHeader, entityList, detailContent) {
 
 // ── List panel ────────────────────────────────────────
 function renderAiList(listHeader, entityList, detailContent) {
-  listHeader.innerHTML = `<div class="list-header-row">
-    <span class="list-title">AI</span>
-    ${_loading ? `<span class="list-count">processing…</span>` : ''}
+  const auth = isAuthenticated();
+
+  const extractActive = _mode === 'extract' ? ' active' : '';
+  const analyzeActive = _mode === 'analyze' ? ' active' : '';
+
+  listHeader.innerHTML = `<div class="admin-header">
+    <div class="list-header-row">
+      <span class="list-title">AI</span>
+      ${_loading ? `<span class="list-count">processing…</span>` : ''}
+    </div>
+    ${auth ? `<div class="admin-tabs">
+      <button class="admin-tab${extractActive}" id="btn-mode-extract">◈ Extract</button>
+      <button class="admin-tab${analyzeActive}" id="btn-mode-analyze">◎ Analyze</button>
+    </div>` : ''}
   </div>`;
 
-  if (!isAuthenticated()) {
+  listHeader.querySelector('#btn-mode-extract')?.addEventListener('click', () => {
+    if (_mode !== 'extract') { _mode = 'extract'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+  });
+  listHeader.querySelector('#btn-mode-analyze')?.addEventListener('click', () => {
+    if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+  });
+
+  if (!auth) {
     entityList.innerHTML = `<div class="ai-locked">
       <div class="ai-locked-icon">◈</div>
       <div class="ai-locked-msg">Sign in to use<br>AI features</div>
@@ -61,22 +79,7 @@ function renderAiList(listHeader, entityList, detailContent) {
     return;
   }
 
-  const extractActive = _mode === 'extract' ? 'active' : '';
-  const analyzeActive = _mode === 'analyze' ? 'active' : '';
-
-  entityList.innerHTML = `
-    <div class="ai-mode-toggle">
-      <button class="ai-mode-btn ${extractActive}" id="btn-mode-extract">◈ Extract</button>
-      <button class="ai-mode-btn ${analyzeActive}" id="btn-mode-analyze">◎ Analyze</button>
-    </div>
-    ${_mode === 'extract' ? renderExtractInput() : renderAnalyzeInput()}`;
-
-  document.getElementById('btn-mode-extract')?.addEventListener('click', () => {
-    if (_mode !== 'extract') { _mode = 'extract'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
-  });
-  document.getElementById('btn-mode-analyze')?.addEventListener('click', () => {
-    if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
-  });
+  entityList.innerHTML = _mode === 'extract' ? renderExtractInput() : renderAnalyzeInput();
 
   const ta  = document.getElementById('ai-textarea');
   const btn = document.getElementById('btn-ai-run');
