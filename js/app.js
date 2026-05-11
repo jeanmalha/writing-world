@@ -5,6 +5,7 @@ import { renderAiView } from './ai-panel.js';
 import { renderAdminView } from './admin.js';
 import { initChat, wireChat, toggleChat, isChatOpen } from './chat.js';
 import { renderProjectView, renderSettingsView } from './project.js';
+import { renderStructureView } from './structure.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
 import { initTheme, getTheme, setTheme } from './theme.js';
@@ -73,6 +74,14 @@ function renderSidebar() {
     <span class="type-count">${counts.character}</span>
   </button>`;
 
+  const strActive = state.view === 'structure' ? 'active' : '';
+  const strCount  = store.getStructure().length;
+  html += `<button class="type-btn ${strActive}" id="btn-structure">
+    <span class="type-icon" style="color:#c084fc">▤</span>
+    <span class="type-label">Structure</span>
+    ${strCount ? `<span class="type-count">${strCount}</span>` : ''}
+  </button>`;
+
   if (isAuthEnabled) {
     const aiActive = state.view === 'ai' ? 'active' : '';
     html += `<button class="type-btn ${aiActive}" id="btn-ai">
@@ -103,6 +112,7 @@ function renderSidebar() {
   $('btn-project')?.addEventListener('click', showProject);
   $('btn-timeline')?.addEventListener('click', showTimeline);
   $('btn-board')?.addEventListener('click', showBoard);
+  $('btn-structure')?.addEventListener('click', showStructure);
   $('btn-ai')?.addEventListener('click', showAiPanel);
   $('btn-settings')?.addEventListener('click', showSettings);
   $('btn-admin')?.addEventListener('click', showAdmin);
@@ -552,6 +562,13 @@ function showBoard() {
   renderAll();
 }
 
+function showStructure() {
+  state.view = 'structure';
+  state.selectedId = null;
+  state.editing = false;
+  renderAll();
+}
+
 function showProject() {
   state.view = 'project';
   state.selectedId = null;
@@ -635,6 +652,7 @@ function renderAll() {
   else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderSidebar, renderAll); }
   else if   (state.view === 'settings')  { renderSettingsView(listHeader, entityList, detailContent, renderSidebar); }
   else if   (state.view === 'admin')     { renderAdminView(listHeader, entityList, detailContent); }
+  else if   (state.view === 'structure') { renderStructureView(listHeader, entityList, detailContent); }
   else                                   { renderList();     renderDetail(); }
   updateStatus();
   updateAuthStatus();

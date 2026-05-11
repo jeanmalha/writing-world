@@ -85,6 +85,13 @@ function _timeSortKey(dateStr) {
   return [year, month];
 }
 
+function _swap(arr, i, dir) {
+  const j = dir === 'up' ? i - 1 : i + 1;
+  if (i < 0 || j < 0 || j >= arr.length) return false;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  return true;
+}
+
 function _emptyProject() {
   return {
     metadata:            {},
@@ -426,7 +433,17 @@ export const store = {
 
   // ── Acts & chapters ───────────────────────────────────
 
-  getStructure() { return _proj().structure || []; },
+  getStructure() {
+    const s = _proj().structure || [];
+    for (const act of s) {
+      for (const ch of (act.chapters || [])) {
+        if (!ch.links)  ch.links  = [];
+        if (!ch.scenes) ch.scenes = [];
+        for (const sc of ch.scenes) { if (!sc.links) sc.links = []; }
+      }
+    }
+    return s;
+  },
 
   addAct(title = 'New Act') {
     if (!_proj().structure) _proj().structure = [];
@@ -448,10 +465,16 @@ export const store = {
     persist(_data);
   },
 
+  moveAct(actId, dir) {
+    const s = _proj().structure || [];
+    const i = s.findIndex(a => a.id === actId);
+    if (_swap(s, i, dir)) persist(_data);
+  },
+
   addChapter(actId, title = 'New Chapter') {
     const act = (_proj().structure || []).find(a => a.id === actId);
     if (!act) return null;
-    const ch = { id: crypto.randomUUID(), title, description: '', notes: '' };
+    const ch = { id: crypto.randomUUID(), title, description: '', notes: '', links: [], scenes: [] };
     act.chapters.push(ch);
     persist(_data);
     return ch;
@@ -469,6 +492,70 @@ export const store = {
     const act = (_proj().structure || []).find(a => a.id === actId);
     if (!act) return;
     act.chapters = act.chapters.filter(c => c.id !== chapterId);
+    persist(_data);
+  },
+
+  moveChapter(actId, chapterId, dir) {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    if (!act) return;
+    const i = act.chapters.findIndex(c => c.id === chapterId);
+    if (_swap(act.chapters, i, dir)) persist(_data);
+  },
+
+  addScene(actId, chapterId, title = 'New Scene') {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    if (!ch) return null;
+    if (!ch.scenes) ch.scenes = [];
+    const sc = { id: crypto.randomUUID(), title, description: '', notes: '', links: [] };
+    ch.scenes.push(sc);
+    persist(_data);
+    return sc;
+  },
+
+  updateScene(actId, chapterId, sceneId, fields) {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    const sc  = ch?.scenes?.find(s => s.id === sceneId);
+    if (!sc) return;
+    Object.assign(sc, fields);
+    persist(_data);
+  },
+
+  deleteScene(actId, chapterId, sceneId) {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    if (!ch) return;
+    ch.scenes = (ch.scenes || []).filter(s => s.id !== sceneId);
+    persist(_data);
+  },
+
+  moveScene(actId, chapterId, sceneId, dir) {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    if (!ch?.scenes) return;
+    const i = ch.scenes.findIndex(s => s.id === sceneId);
+    if (_swap(ch.scenes, i, dir)) persist(_data);
+  },
+
+  addStructureLink(actId, chapterId, sceneId, entityId, label) {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    if (!ch) return;
+    const target = sceneId ? ch.scenes?.find(s => s.id === sceneId) : ch;
+    if (!target) return;
+    if (!target.links) target.links = [];
+    target.links.push({ entityId, label: label || '' });
+    persist(_data);
+  },
+
+  removeStructureLink(actId, chapterId, sceneId, index) {
+    const act = (_proj().structure || []).find(a => a.id === actId);
+    const ch  = act?.chapters?.find(c => c.id === chapterId);
+    if (!ch) return;
+    const target = sceneId ? ch.scenes?.find(s => s.id === sceneId) : ch;
+    if (!target?.links) return;
+    target.links.splice(index, 1);
     persist(_data);
   },
 
