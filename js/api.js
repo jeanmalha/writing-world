@@ -57,6 +57,18 @@ export async function startAnalysis(entities, model = 'simple') {
   return resp.json();   // { jobId, status: 'processing' }
 }
 
+export async function startStructureExtraction(text, existingStructure = [], model = 'simple') {
+  const resp = await apiFetch('/extract-structure', {
+    method: 'POST',
+    body:   JSON.stringify({ text, existingStructure, model }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
 export async function submitInterest(name, email, subscriptionInterest) {
   const resp = await fetch(`${AUTH_CONFIG.apiEndpoint}/interest`, {
     method:  'POST',

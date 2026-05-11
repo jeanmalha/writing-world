@@ -197,6 +197,10 @@ def handler(event, context):
         return start_job(event, 'analyze')
     if method == 'GET'  and '/analyze/' in path:
         return poll(path.split('/')[-1])
+    if method == 'POST' and path.endswith('/extract-structure'):
+        return start_job(event, 'extract-structure')
+    if method == 'GET'  and '/extract-structure/' in path:
+        return poll(path.split('/')[-1])
     if method == 'GET'    and path.endswith('/admin/users'):
         return admin_list_users(event)
     if method == 'POST'   and path.endswith('/admin/users'):
@@ -274,6 +278,15 @@ def start_job(event, job_type):
         item['pageCount'] = len(pages)
         if existing:
             item['existing'] = json.dumps(existing)
+
+    elif job_type == 'extract-structure':
+        text = str(body.get('text', '')).strip()
+        if not text:
+            return out(400, {'error': 'text is required'})
+        item['text'] = text
+        existing_structure = body.get('existingStructure', [])
+        if existing_structure:
+            item['existing'] = json.dumps(existing_structure)
 
     else:  # analyze
         existing = body.get('entities', [])
@@ -778,6 +791,9 @@ def process(event, context):
             obj    = s3.get_object(Bucket=PDF_BUCKET, Key=item.get('s3Key', ''))
             pages  = json.loads(obj['Body'].read())
             result = run_extract_pdf_agent(pages, existing, model_id, usage)
+        elif job_type == 'extract-structure':
+            existing_structure = json.loads(item.get('existing', '[]'))
+            result = run_structure_agent(item.get('text', ''), existing_structure, model_id, usage)
         else:
             result = run_analyze_agent(existing, model_id, usage)
 
@@ -998,6 +1014,84 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
     _add_usage(r, usage)
 
     return {'links': state['links'], 'merges': state['merges']}
+
+
+# ── Structure extraction agent ────────────────────────────────────────────────
+
+def run_structure_agent(text: str, existing_structure: list, model_id: str, usage: dict = None) -> dict:
+    state = {'acts': []}
+
+    @tool
+    def add_act(title: str, description: str = '') -> str:
+        """Record a major act or part of the narrative (e.g. Act I, Part One, The Beginning).
+        Args:
+            title: concise act title
+            description: 1-2 sentence summary of what this act covers
+        """
+        state['acts'].append({'title': title, 'description': description, 'chapters': []})
+        return f"Act '{title}' recorded (index {len(state['acts'])-1})"
+
+    @tool
+    def add_chapter(act_index: int, title: str, description: str = '') -> str:
+        """Record a chapter or major section within an act.
+        Args:
+            act_index: 0-based index of the act this chapter belongs to
+            title: concise chapter title
+            description: 1-2 sentence summary
+        """
+        while len(state['acts']) <= act_index:
+            state['acts'].append({'title': f'Act {len(state["acts"])+1}', 'description': '', 'chapters': []})
+        state['acts'][act_index]['chapters'].append({'title': title, 'description': description, 'scenes': []})
+        idx = len(state['acts'][act_index]['chapters']) - 1
+        return f"Chapter '{title}' added to act {act_index} (chapter index {idx})"
+
+    @tool
+    def add_scene(act_index: int, chapter_index: int, title: str, description: str = '') -> str:
+        """Record a scene or distinct narrative beat within a chapter.
+        Args:
+            act_index: 0-based index of the parent act
+            chapter_index: 0-based index of the parent chapter within the act
+            title: concise scene title (what happens, e.g. 'Morning briefing', 'Escape from station')
+            description: 1-2 sentence summary
+        """
+        try:
+            state['acts'][act_index]['chapters'][chapter_index]['scenes'].append(
+                {'title': title, 'description': description})
+            return f"Scene '{title}' recorded"
+        except IndexError:
+            return f"Error: act {act_index} chapter {chapter_index} not found"
+
+    existing_ctx = ''
+    if existing_structure:
+        lines = ['EXISTING BOOK STRUCTURE (do not duplicate these):']
+        for i, act in enumerate(existing_structure):
+            lines.append(f"  Act {i+1}: {act.get('title','')}")
+            for j, ch in enumerate(act.get('chapters', [])):
+                lines.append(f"    Ch {j+1}: {ch.get('title','')}")
+        existing_ctx = '\n'.join(lines) + '\n\n'
+
+    agent = Agent(
+        model=BedrockModel(model_id=model_id),
+        tools=[add_act, add_chapter, add_scene],
+        system_prompt=(
+            "You are a narrative structure analyst. Given novel text, identify its hierarchical structure.\n\n"
+            "An ACT is a major story division (beginning/middle/end, Part One/Two, or unnamed if the whole text is one act).\n"
+            "A CHAPTER is a chapter or section within an act.\n"
+            "A SCENE is a distinct scene or beat within a chapter — a change of location, time, or focus.\n\n"
+            "Rules:\n"
+            "- Always call add_act first, then add_chapter, then add_scene in order.\n"
+            "- If the text is a single chapter, create one act and one chapter, then its scenes.\n"
+            "- Give titles that are concise and descriptive (2–6 words), not chapter numbers.\n"
+            "- Write brief descriptions summarising what happens, not what could happen.\n"
+            "- Do not duplicate items that already exist in the provided structure."
+        ),
+    )
+
+    r = agent(f"{existing_ctx}Analyse this novel text and call add_act, add_chapter, and add_scene "
+              f"to record its narrative structure:\n\n{text[:12000]}")
+    _add_usage(r, usage)
+
+    return {'acts': state['acts']}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

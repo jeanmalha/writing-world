@@ -1,6 +1,6 @@
 import { store, TYPES } from './store.js';
 import { isAuthenticated, login, getUserTier } from './auth.js';
-import { startExtraction, startAnalysis, startPdfExtraction, pollJob } from './api.js';
+import { startExtraction, startAnalysis, startPdfExtraction, startStructureExtraction, pollJob } from './api.js';
 
 // Module state — persists while AI view is active
 let _mode    = 'extract';   // 'extract' | 'analyze'
@@ -48,8 +48,9 @@ export function renderAiView(listHeader, entityList, detailContent) {
 function renderAiList(listHeader, entityList, detailContent) {
   const auth = isAuthenticated();
 
-  const extractActive = _mode === 'extract' ? ' active' : '';
-  const analyzeActive = _mode === 'analyze' ? ' active' : '';
+  const extractActive   = _mode === 'extract'   ? ' active' : '';
+  const structActive    = _mode === 'structure'  ? ' active' : '';
+  const analyzeActive   = _mode === 'analyze'    ? ' active' : '';
 
   listHeader.innerHTML = `<div class="admin-header">
     <div class="list-header-row">
@@ -57,16 +58,20 @@ function renderAiList(listHeader, entityList, detailContent) {
       ${_loading ? `<span class="list-count">processing…</span>` : ''}
     </div>
     ${auth ? `<div class="admin-tabs">
-      <button class="admin-tab${extractActive}" id="btn-mode-extract">◈ Extract</button>
-      <button class="admin-tab${analyzeActive}" id="btn-mode-analyze">◎ Analyze</button>
+      <button class="admin-tab${extractActive}"  id="btn-mode-extract">◈ Extract</button>
+      <button class="admin-tab${structActive}"   id="btn-mode-structure">▤ Structure</button>
+      <button class="admin-tab${analyzeActive}"  id="btn-mode-analyze">◎ Analyze</button>
     </div>` : ''}
   </div>`;
 
   listHeader.querySelector('#btn-mode-extract')?.addEventListener('click', () => {
-    if (_mode !== 'extract') { _mode = 'extract'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+    if (_mode !== 'extract')   { _mode = 'extract';    _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+  });
+  listHeader.querySelector('#btn-mode-structure')?.addEventListener('click', () => {
+    if (_mode !== 'structure') { _mode = 'structure';  _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
   });
   listHeader.querySelector('#btn-mode-analyze')?.addEventListener('click', () => {
-    if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+    if (_mode !== 'analyze')   { _mode = 'analyze';    _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
   });
 
   if (!auth) {
@@ -79,7 +84,9 @@ function renderAiList(listHeader, entityList, detailContent) {
     return;
   }
 
-  entityList.innerHTML = _mode === 'extract' ? renderExtractInput() : renderAnalyzeInput();
+  entityList.innerHTML = _mode === 'extract'   ? renderExtractInput()   :
+                         _mode === 'structure' ? renderStructureInput() :
+                                                 renderAnalyzeInput();
 
   const ta  = document.getElementById('ai-textarea');
   const btn = document.getElementById('btn-ai-run');
@@ -88,6 +95,7 @@ function renderAiList(listHeader, entityList, detailContent) {
 
   btn?.addEventListener('click', () => {
     if (_mode === 'analyze')       runAnalyze(listHeader, entityList, detailContent);
+    else if (_mode === 'structure') runStructureExtract(listHeader, entityList, detailContent);
     else if (_source === 'pdf')    runPdfExtract(listHeader, entityList, detailContent);
     else                           runExtract(listHeader, entityList, detailContent);
   });
@@ -186,6 +194,37 @@ function renderPdfInput() {
     <span class="ai-pdf-label">Drop PDF or click to browse</span>
     <span class="ai-pdf-hint">Text will be extracted page by page</span>
   </label>`;
+}
+
+function renderStructureInput() {
+  const tier    = getUserTier();
+  const blocked = tier === 'explorer' && _model === 'complex';
+  const actCount = store.getStructure().length;
+  return `<div class="ai-input-area">
+    <div class="ai-analyze-desc">
+      Paste text from your novel and the AI will identify acts, chapters, and scenes.
+      ${actCount ? `You have <strong>${actCount}</strong> existing act${actCount !== 1 ? 's' : ''} — duplicates will be skipped.` : ''}
+    </div>
+    <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The AI will identify the narrative structure: acts, chapters, and scenes." rows="6">${esc(_text)}</textarea>
+    ${_modelToggleHtml()}
+    <button id="btn-ai-run" ${_loading || blocked || !_text.trim() ? 'disabled' : ''}>
+      ${_loading ? '▤ Extracting structure…' : '▶ Extract Structure'}
+    </button>
+    ${_status ? `<div class="ai-status-msg">${esc(_status)}</div>` : ''}
+  </div>`;
+}
+
+async function runStructureExtract(listHeader, entityList, detailContent) {
+  _text = document.getElementById('ai-textarea')?.value.trim() || '';
+  if (!_text || _loading) return;
+
+  const existingStructure = store.getStructure().map(a => ({
+    title: a.title,
+    chapters: (a.chapters || []).map(c => ({ title: c.title })),
+  }));
+
+  await runJob(() => startStructureExtraction(_text, existingStructure, _model),
+               'extract-structure', listHeader, entityList, detailContent);
 }
 
 function renderAnalyzeInput() {
@@ -346,16 +385,16 @@ function renderAiDetail(detailContent) {
   }
 
   if (!_results) {
-    detailContent.innerHTML = `<div class="empty-state detail-empty">
-      ${_mode === 'extract'
-        ? 'Paste novel text on the left<br>and click Extract.'
-        : 'Click Analyze World to find<br>missing links and duplicates.'}
-    </div>`;
+    const hint = _mode === 'extract'   ? 'Paste novel text on the left<br>and click Extract.'
+               : _mode === 'structure' ? 'Paste text on the left and click<br>Extract Structure.'
+               :                        'Click Analyze World to find<br>missing links and duplicates.';
+    detailContent.innerHTML = `<div class="empty-state detail-empty">${hint}</div>`;
     return;
   }
 
-  if (_mode === 'extract') renderExtractResults(detailContent);
-  else                     renderAnalyzeResults(detailContent);
+  if (_mode === 'extract')   renderExtractResults(detailContent);
+  else if (_mode === 'structure') renderStructureResults(detailContent);
+  else                       renderAnalyzeResults(detailContent);
 }
 
 // ── Extract results ───────────────────────────────────
@@ -466,6 +505,133 @@ function renderExtractResults(detailContent) {
     detailContent.innerHTML = `<div class="empty-state detail-empty">
       Applied ${applied} change${applied !== 1 ? 's' : ''}.<br>Paste more text to continue.
     </div>`;
+  });
+}
+
+// ── Structure results ─────────────────────────────────
+function renderStructureResults(detailContent) {
+  const acts = _results?.acts || [];
+  if (!acts.length) {
+    detailContent.innerHTML = `<div class="empty-state detail-empty">No structure identified.</div>`;
+    return;
+  }
+
+  const ROMAN = ['','I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII','XIII','XIV','XV'];
+  const roman = n => ROMAN[n] || String(n);
+
+  // Track added items: 'act-0' → store actId, 'act-0-ch-1' → storeChapterId
+  const added = {};
+
+  const actsHtml = acts.map((act, ai) => {
+    const chsHtml = (act.chapters || []).map((ch, ci) => {
+      const scHtml = (ch.scenes || []).map((sc, si) =>
+        `<div class="ai-struct-scene">
+          <span class="ai-struct-dot">·</span>
+          <span class="ai-struct-title">${esc(sc.title)}</span>
+          ${sc.description ? `<span class="ai-struct-desc"> — ${esc(sc.description)}</span>` : ''}
+          <button class="ai-struct-add" data-type="scene" data-ai="${ai}" data-ci="${ci}" data-si="${si}">+ Add</button>
+        </div>`).join('');
+      return `<div class="ai-struct-chapter">
+        <div class="ai-struct-row">
+          <span class="ai-struct-badge-ch">Ch ${ci + 1}</span>
+          <span class="ai-struct-title">${esc(ch.title)}</span>
+          <button class="ai-struct-add" data-type="chapter" data-ai="${ai}" data-ci="${ci}">+ Add</button>
+        </div>
+        ${ch.description ? `<div class="ai-struct-desc-row">${esc(ch.description)}</div>` : ''}
+        ${scHtml}
+      </div>`;
+    }).join('');
+
+    return `<div class="ai-struct-act">
+      <div class="ai-struct-row ai-struct-act-row">
+        <span class="ai-struct-badge">Act ${roman(ai + 1)}</span>
+        <span class="ai-struct-title">${esc(act.title)}</span>
+        <button class="ai-struct-add ai-struct-add-act" data-type="act" data-ai="${ai}">+ Add all</button>
+      </div>
+      ${act.description ? `<div class="ai-struct-desc-row">${esc(act.description)}</div>` : ''}
+      ${chsHtml}
+    </div>`;
+  }).join('');
+
+  detailContent.innerHTML = `<div class="ai-struct-results">
+    <div class="ai-struct-header">
+      <span>${acts.length} act${acts.length !== 1 ? 's' : ''} · ${acts.reduce((n,a)=>n+(a.chapters||[]).length,0)} chapters extracted</span>
+      <button id="ai-struct-add-all">Add All to Structure</button>
+    </div>
+    ${actsHtml}
+  </div>`;
+
+  function addAct(ai) {
+    if (added[`act-${ai}`]) return added[`act-${ai}`];
+    const act    = acts[ai];
+    const stored = store.addAct(act.title);
+    store.updateAct(stored.id, { description: act.description || '' });
+    added[`act-${ai}`] = stored.id;
+    return stored.id;
+  }
+
+  function addChapter(ai, ci) {
+    const key = `act-${ai}-ch-${ci}`;
+    if (added[key]) return added[key];
+    const actId = addAct(ai);
+    const ch    = acts[ai].chapters[ci];
+    const stored = store.addChapter(actId, ch.title);
+    store.updateChapter(actId, stored.id, { description: ch.description || '' });
+    added[key] = stored.id;
+    return stored.id;
+  }
+
+  function addScene(ai, ci, si) {
+    const key = `act-${ai}-ch-${ci}-sc-${si}`;
+    if (added[key]) return;
+    const actId = added[`act-${ai}`] || addAct(ai);
+    const chId  = added[`act-${ai}-ch-${ci}`] || addChapter(ai, ci);
+    const sc    = acts[ai].chapters[ci].scenes[si];
+    const stored = store.addScene(actId, chId, sc.title);
+    if (stored) store.updateScene(actId, chId, stored.id, { description: sc.description || '' });
+    added[key] = stored?.id;
+  }
+
+  function markAdded(btn) {
+    btn.textContent = '✓';
+    btn.disabled = true;
+    btn.classList.add('ai-struct-added');
+  }
+
+  detailContent.querySelectorAll('.ai-struct-add').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const { type, ai, ci, si } = btn.dataset;
+      const aN = parseInt(ai), cN = parseInt(ci), sN = parseInt(si);
+      if (type === 'act') {
+        addAct(aN);
+        (acts[aN].chapters || []).forEach((_, cI) => {
+          addChapter(aN, cI);
+          ((acts[aN].chapters[cI].scenes) || []).forEach((_, sI) => addScene(aN, cI, sI));
+        });
+        // Mark all children
+        detailContent.querySelectorAll(`[data-ai="${aN}"]`).forEach(b => markAdded(b));
+      } else if (type === 'chapter') {
+        addChapter(aN, cN);
+        ((acts[aN].chapters[cN].scenes) || []).forEach((_, sI) => addScene(aN, cN, sI));
+        detailContent.querySelectorAll(`[data-ai="${aN}"][data-ci="${cN}"]`).forEach(b => markAdded(b));
+      } else {
+        addScene(aN, cN, sN);
+        markAdded(btn);
+      }
+    });
+  });
+
+  document.getElementById('ai-struct-add-all')?.addEventListener('click', e => {
+    acts.forEach((act, ai) => {
+      addAct(ai);
+      (act.chapters || []).forEach((_, ci) => {
+        addChapter(ai, ci);
+        ((acts[ai].chapters[ci].scenes) || []).forEach((_, si) => addScene(ai, ci, si));
+      });
+    });
+    detailContent.querySelectorAll('.ai-struct-add').forEach(b => markAdded(b));
+    e.currentTarget.textContent = '✓ All Added';
+    e.currentTarget.disabled = true;
   });
 }
 

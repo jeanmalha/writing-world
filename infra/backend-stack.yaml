@@ -552,6 +552,24 @@ Resources:
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'
 
+  PostExtractStructureRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /extract-structure
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetExtractStructureRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /extract-structure/{jobId}'
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
   GetAdminUsersRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:

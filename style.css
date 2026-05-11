@@ -2580,3 +2580,46 @@ body.board-mode #board-panel {
 .str-link-result:hover { background: var(--hover-bg); }
 .str-link-result-type { color: var(--text-muted); font-size: 10px; min-width: 60px; }
 .str-link-result-name { color: var(--text); flex: 1; }
+
+/* ── AI Structure results ────────────────────────────── */
+.ai-struct-results { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+.ai-struct-header  {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-muted);
+}
+.ai-struct-header button {
+  font-family: var(--font); font-size: 10px; padding: 3px 10px;
+  background: none; border: 1px solid var(--accent); color: var(--accent); cursor: pointer;
+}
+.ai-struct-header button:hover { background: rgba(59,130,246,0.08); }
+.ai-struct-header button:disabled { opacity: .5; cursor: default; }
+
+.ai-struct-act { display: flex; flex-direction: column; gap: 4px; }
+.ai-struct-chapter { padding-left: 12px; display: flex; flex-direction: column; gap: 2px; }
+.ai-struct-scene   { padding-left: 24px; display: flex; align-items: center; gap: 6px;
+                     font-size: 11px; color: var(--text-muted); padding-top: 2px; }
+
+.ai-struct-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.ai-struct-act-row { border-bottom-color: var(--panel-border); }
+
+.ai-struct-badge    { font-size: 9px; color: var(--accent); letter-spacing: .06em;
+                      min-width: 32px; font-weight: bold; }
+.ai-struct-badge-ch { font-size: 9px; color: var(--text-muted); letter-spacing: .04em;
+                      min-width: 28px; }
+.ai-struct-dot      { font-size: 14px; color: var(--text-muted); flex-shrink: 0; }
+.ai-struct-title    { flex: 1; font-size: 12px; color: var(--text); font-weight: 500;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-struct-desc     { font-size: 10px; color: var(--text-muted); }
+.ai-struct-desc-row { font-size: 10px; color: var(--text-muted); padding: 2px 0 4px 38px;
+                      line-height: 1.5; }
+
+.ai-struct-add {
+  flex-shrink: 0; font-family: var(--font); font-size: 10px; padding: 2px 7px;
+  background: none; border: 1px solid var(--panel-border); color: var(--text-muted); cursor: pointer;
+}
+.ai-struct-add:hover   { border-color: var(--accent); color: var(--accent); }
+.ai-struct-added       { border-color: var(--accent) !important; color: var(--accent) !important; opacity: .5; }
+.ai-struct-add-act     { border-color: var(--accent); color: var(--accent); }
