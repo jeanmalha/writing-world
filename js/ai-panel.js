@@ -382,7 +382,7 @@ function renderAiDetail(detailContent) {
     detailContent.innerHTML = `<div class="ai-working">
       <div class="ai-working-pulse">${_mode === 'extract' ? '◈' : '◎'}</div>
       <div>${esc(_status || 'Processing…')}</div>
-      <div class="ai-working-sub">${_source === 'pdf' ? 'Processing chunks…' : 'Claude is working'}</div>
+      <div class="ai-working-sub">${_source === 'pdf' ? 'Lore is reading your PDF…' : 'Lore is looking at your piece.'}</div>
     </div>`;
     return;
   }
