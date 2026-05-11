@@ -3,9 +3,10 @@ import { isAuthenticated, login, getUserTier } from './auth.js';
 import { startExtraction, startAnalysis, startPdfExtraction, startStructureExtraction, pollJob } from './api.js';
 
 // Module state — persists while AI view is active
-let _mode    = 'extract';   // 'extract' | 'analyze'
-let _source  = 'text';      // 'text' | 'pdf'
-let _model   = 'simple';    // 'simple' | 'complex'
+let _mode             = 'extract';   // 'extract' | 'analyze'
+let _source           = 'text';      // 'text' | 'pdf'
+let _model            = 'simple';    // 'simple' | 'complex'
+let _includeStructure = false;
 let _text    = '';
 let _results = null;
 let _status  = '';
@@ -48,9 +49,8 @@ export function renderAiView(listHeader, entityList, detailContent) {
 function renderAiList(listHeader, entityList, detailContent) {
   const auth = isAuthenticated();
 
-  const extractActive   = _mode === 'extract'   ? ' active' : '';
-  const structActive    = _mode === 'structure'  ? ' active' : '';
-  const analyzeActive   = _mode === 'analyze'    ? ' active' : '';
+  const extractActive = _mode === 'extract' ? ' active' : '';
+  const analyzeActive = _mode === 'analyze' ? ' active' : '';
 
   listHeader.innerHTML = `<div class="admin-header">
     <div class="list-header-row">
@@ -58,20 +58,16 @@ function renderAiList(listHeader, entityList, detailContent) {
       ${_loading ? `<span class="list-count">processing…</span>` : ''}
     </div>
     ${auth ? `<div class="admin-tabs">
-      <button class="admin-tab${extractActive}"  id="btn-mode-extract">◈ Extract</button>
-      <button class="admin-tab${structActive}"   id="btn-mode-structure">▤ Structure</button>
-      <button class="admin-tab${analyzeActive}"  id="btn-mode-analyze">◎ Analyze</button>
+      <button class="admin-tab${extractActive}" id="btn-mode-extract">◈ Extract</button>
+      <button class="admin-tab${analyzeActive}" id="btn-mode-analyze">◎ Analyze</button>
     </div>` : ''}
   </div>`;
 
   listHeader.querySelector('#btn-mode-extract')?.addEventListener('click', () => {
-    if (_mode !== 'extract')   { _mode = 'extract';    _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
-  });
-  listHeader.querySelector('#btn-mode-structure')?.addEventListener('click', () => {
-    if (_mode !== 'structure') { _mode = 'structure';  _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+    if (_mode !== 'extract') { _mode = 'extract'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
   });
   listHeader.querySelector('#btn-mode-analyze')?.addEventListener('click', () => {
-    if (_mode !== 'analyze')   { _mode = 'analyze';    _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+    if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
   });
 
   if (!auth) {
@@ -84,9 +80,7 @@ function renderAiList(listHeader, entityList, detailContent) {
     return;
   }
 
-  entityList.innerHTML = _mode === 'extract'   ? renderExtractInput()   :
-                         _mode === 'structure' ? renderStructureInput() :
-                                                 renderAnalyzeInput();
+  entityList.innerHTML = _mode === 'extract' ? renderExtractInput() : renderAnalyzeInput();
 
   const ta  = document.getElementById('ai-textarea');
   const btn = document.getElementById('btn-ai-run');
@@ -94,10 +88,9 @@ function renderAiList(listHeader, entityList, detailContent) {
   ta?.addEventListener('input', () => { _text = ta.value; });
 
   btn?.addEventListener('click', () => {
-    if (_mode === 'analyze')       runAnalyze(listHeader, entityList, detailContent);
-    else if (_mode === 'structure') runStructureExtract(listHeader, entityList, detailContent);
-    else if (_source === 'pdf')    runPdfExtract(listHeader, entityList, detailContent);
-    else                           runExtract(listHeader, entityList, detailContent);
+    if (_mode === 'analyze')    runAnalyze(listHeader, entityList, detailContent);
+    else if (_source === 'pdf') runPdfExtract(listHeader, entityList, detailContent);
+    else                        runExtract(listHeader, entityList, detailContent);
   });
 
   // Source toggle
@@ -106,6 +99,11 @@ function renderAiList(listHeader, entityList, detailContent) {
   });
   document.getElementById('btn-src-pdf')?.addEventListener('click', () => {
     if (_source !== 'pdf') { _source = 'pdf'; rerender(listHeader, entityList, detailContent); }
+  });
+
+  // Structure checkbox
+  document.getElementById('ai-cb-structure')?.addEventListener('change', e => {
+    _includeStructure = e.target.checked;
   });
 
   // Model toggle
@@ -150,9 +148,9 @@ function _modelToggleHtml() {
 }
 
 function renderExtractInput() {
-  const srcText  = _source === 'text';
-  const tier     = getUserTier();
-  const blocked  = tier === 'explorer' && _model === 'complex';
+  const srcText = _source === 'text';
+  const tier    = getUserTier();
+  const blocked = tier === 'explorer' && _model === 'complex';
   return `<div class="ai-input-area">
     <div class="ai-source-toggle">
       <button class="ai-src-btn${srcText ? ' active' : ''}" id="btn-src-text">Text</button>
@@ -161,6 +159,10 @@ function renderExtractInput() {
     ${srcText ? `
       <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The model will extract and match against your existing entities.">${esc(_text)}</textarea>
     ` : renderPdfInput()}
+    <label class="ai-struct-checkbox">
+      <input type="checkbox" id="ai-cb-structure" ${_includeStructure ? 'checked' : ''}>
+      Also extract book structure (acts, chapters, scenes)
+    </label>
     ${_modelToggleHtml()}
     <button id="btn-ai-run" ${_loading || blocked || (_source === 'pdf' && !_pdfPages.length && !_pdfExtracting) ? 'disabled' : ''}>
       ${_loading ? (_source === 'pdf' ? '◈ Extracting PDF…' : '◈ Extracting…') : (_source === 'pdf' ? '▶ Extract PDF' : '▶ Extract')}
@@ -285,35 +287,94 @@ async function handlePdfFile(file, listHeader, entityList, detailContent) {
 }
 
 // ── Run + poll ────────────────────────────────────────
+
+function _existingEntities() {
+  return store.getAll().map(e => ({
+    id: e.id, type: e.type, name: e.name, description: e.description || '',
+    ...(e.role    ? { role:    e.role    } : {}),
+    ...(e.locType ? { locType: e.locType } : {}),
+    ...(e.date    ? { date:    e.date    } : {}),
+  }));
+}
+
+function _existingStructure() {
+  return store.getStructure().map(a => ({
+    title: a.title, chapters: (a.chapters || []).map(c => ({ title: c.title })),
+  }));
+}
+
 async function runExtract(listHeader, entityList, detailContent) {
   _text = document.getElementById('ai-textarea')?.value.trim() || '';
   if (!_text || _loading) return;
 
-  // Serialize existing entities for context/disambiguation
-  const existingEntities = store.getAll().map(e => ({
-    id:          e.id,
-    type:        e.type,
-    name:        e.name,
-    description: e.description || '',
-    ...(e.role     ? { role:    e.role    } : {}),
-    ...(e.locType  ? { locType: e.locType } : {}),
-    ...(e.date     ? { date:    e.date    } : {}),
-  }));
+  if (!_includeStructure) {
+    await runJob(() => startExtraction(_text, _existingEntities(), _model),
+                 'extract', listHeader, entityList, detailContent);
+    return;
+  }
 
-  await runJob(() => startExtraction(_text, existingEntities, _model), 'extract',
-               listHeader, entityList, detailContent);
+  await runParallelExtract(
+    () => startExtraction(_text, _existingEntities(), _model),
+    () => startStructureExtraction(_text, _existingStructure(), _model),
+    listHeader, entityList, detailContent,
+  );
 }
 
 async function runPdfExtract(listHeader, entityList, detailContent) {
   if (!_pdfPages.length || _loading) return;
 
-  const existingEntities = store.getAll().map(e => ({
-    id: e.id, type: e.type, name: e.name, description: e.description || '',
-    ...(e.role    ? { role:    e.role    } : {}),
-    ...(e.locType ? { locType: e.locType } : {}),
-  }));
+  if (!_includeStructure) {
+    await runJob(() => startPdfExtraction(_pdfPages, _existingEntities(), _model),
+                 'extract-pdf', listHeader, entityList, detailContent);
+    return;
+  }
 
-  await runJob(() => startPdfExtraction(_pdfPages, existingEntities, _model),
+  const pdfText = _pdfPages.join('\n\n');
+  await runParallelExtract(
+    () => startPdfExtraction(_pdfPages, _existingEntities(), _model),
+    () => startStructureExtraction(pdfText, _existingStructure(), _model),
+    listHeader, entityList, detailContent,
+    'extract-pdf',
+  );
+}
+
+async function runParallelExtract(entityStartFn, structStartFn, listHeader, entityList, detailContent, entityEndpoint = 'extract') {
+  _loading = true; _status = 'Starting…'; _results = null; _polling = true;
+  rerender(listHeader, entityList, detailContent);
+  _syncSendBtn();
+
+  try {
+    const [entityJob, structJob] = await Promise.all([entityStartFn(), structStartFn()]);
+    let dots = 0;
+    while (_polling) {
+      await sleep(3000);
+      const [ep, sp] = await Promise.all([
+        pollJob(entityEndpoint, entityJob.jobId),
+        pollJob('extract-structure', structJob.jobId),
+      ]);
+      if (ep.status === 'error')  { _status = ep.error || 'Extraction failed'; break; }
+      if (sp.status === 'error')  { _status = sp.error || 'Structure extraction failed'; break; }
+      if (ep.status === 'done' && sp.status === 'done') {
+        _results = { ...ep.result, structure: sp.result };
+        _status = ''; break;
+      }
+      dots = (dots + 1) % 4;
+      _status = 'Extracting' + '.'.repeat(dots + 1);
+      rerender(listHeader, entityList, detailContent);
+    }
+  } catch (e) {
+    _status = e.message;
+  } finally {
+    _loading = false; _polling = false;
+    rerender(listHeader, entityList, detailContent);
+    _syncSendBtn();
+  }
+}
+
+// (kept for potential future reuse)
+async function runPdfExtractLegacy(listHeader, entityList, detailContent) {
+  if (!_pdfPages.length || _loading) return;
+  await runJob(() => startPdfExtraction(_pdfPages, _existingEntities(), _model),
                'extract-pdf', listHeader, entityList, detailContent);
 }
 
@@ -395,9 +456,8 @@ function renderAiDetail(detailContent) {
     return;
   }
 
-  if (_mode === 'extract')   renderExtractResults(detailContent);
-  else if (_mode === 'structure') renderStructureResults(detailContent);
-  else                       renderAnalyzeResults(detailContent);
+  if (_mode === 'extract') renderExtractResults(detailContent);
+  else                     renderAnalyzeResults(detailContent);
 }
 
 // ── Extract results ───────────────────────────────────
@@ -484,7 +544,7 @@ function renderExtractResults(detailContent) {
     store.getAll().forEach(e => { if (e.name) nameToId[e.name.toLowerCase()] = e.id; });
 
     let applied = 0;
-    detailContent.querySelectorAll('.ai-cb-create:checked').forEach(cb => {
+    container.querySelectorAll('.ai-cb-create:checked').forEach(cb => {
       const item = creates[parseInt(cb.dataset.index)];
       if (item) {
         const entity = importCreate(item);
@@ -492,11 +552,11 @@ function renderExtractResults(detailContent) {
         applied++;
       }
     });
-    detailContent.querySelectorAll('.ai-cb-update:checked').forEach(cb => {
+    container.querySelectorAll('.ai-cb-update:checked').forEach(cb => {
       const upd = updates[parseInt(cb.dataset.index)];
       if (upd && store.get(upd.id)) { store.update(upd.id, upd.changes); applied++; }
     });
-    detailContent.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
+    container.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
       const l   = links[parseInt(cb.dataset.index)];
       if (!l)   return;
       const src = nameToId[l.sourceName?.toLowerCase()];
@@ -509,13 +569,20 @@ function renderExtractResults(detailContent) {
       Applied ${applied} change${applied !== 1 ? 's' : ''}.<br>Paste more text to continue.
     </div>`;
   });
+
+  // Structure section (when checkbox was checked)
+  if (_results?.structure?.acts?.length) {
+    const structEl = document.createElement('div');
+    structEl.className = 'ai-struct-inline';
+    detailContent.appendChild(structEl);
+    _renderStructureSection(structEl, _results.structure.acts);
+  }
 }
 
 // ── Structure results ─────────────────────────────────
-function renderStructureResults(detailContent) {
-  const acts = _results?.acts || [];
-  if (!acts.length) {
-    detailContent.innerHTML = `<div class="empty-state detail-empty">No structure identified.</div>`;
+function _renderStructureSection(container, acts) {
+  if (!acts?.length) {
+    container.innerHTML = `<div class="empty-state detail-empty">No structure identified.</div>`;
     return;
   }
 
@@ -556,7 +623,7 @@ function renderStructureResults(detailContent) {
     </div>`;
   }).join('');
 
-  detailContent.innerHTML = `<div class="ai-struct-results">
+  container.innerHTML = `<div class="ai-struct-results">
     <div class="ai-struct-header">
       <span>${acts.length} act${acts.length !== 1 ? 's' : ''} · ${acts.reduce((n,a)=>n+(a.chapters||[]).length,0)} chapters extracted</span>
       <button id="ai-struct-add-all">Add All to Structure</button>
@@ -601,7 +668,7 @@ function renderStructureResults(detailContent) {
     btn.classList.add('ai-struct-added');
   }
 
-  detailContent.querySelectorAll('.ai-struct-add').forEach(btn => {
+  container.querySelectorAll('.ai-struct-add').forEach(btn => {
     btn.addEventListener('click', () => {
       const { type, ai, ci, si } = btn.dataset;
       const aN = parseInt(ai), cN = parseInt(ci), sN = parseInt(si);
@@ -612,11 +679,11 @@ function renderStructureResults(detailContent) {
           ((acts[aN].chapters[cI].scenes) || []).forEach((_, sI) => addScene(aN, cI, sI));
         });
         // Mark all children
-        detailContent.querySelectorAll(`[data-ai="${aN}"]`).forEach(b => markAdded(b));
+        container.querySelectorAll(`[data-ai="${aN}"]`).forEach(b => markAdded(b));
       } else if (type === 'chapter') {
         addChapter(aN, cN);
         ((acts[aN].chapters[cN].scenes) || []).forEach((_, sI) => addScene(aN, cN, sI));
-        detailContent.querySelectorAll(`[data-ai="${aN}"][data-ci="${cN}"]`).forEach(b => markAdded(b));
+        container.querySelectorAll(`[data-ai="${aN}"][data-ci="${cN}"]`).forEach(b => markAdded(b));
       } else {
         addScene(aN, cN, sN);
         markAdded(btn);
@@ -632,7 +699,7 @@ function renderStructureResults(detailContent) {
         ((acts[ai].chapters[ci].scenes) || []).forEach((_, si) => addScene(ai, ci, si));
       });
     });
-    detailContent.querySelectorAll('.ai-struct-add').forEach(b => markAdded(b));
+    container.querySelectorAll('.ai-struct-add').forEach(b => markAdded(b));
     e.currentTarget.textContent = '✓ All Added';
     e.currentTarget.disabled = true;
   });
@@ -703,14 +770,14 @@ function renderAnalyzeResults(detailContent) {
 
   document.getElementById('btn-apply-suggestions')?.addEventListener('click', () => {
     let applied = 0;
-    detailContent.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
+    container.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
       const l = links[parseInt(cb.dataset.index)];
       if (l && store.get(l.sourceId) && store.get(l.targetId)) {
         store.addLink(l.sourceId, l.targetId, l.label);
         applied++;
       }
     });
-    detailContent.querySelectorAll('.ai-cb-merge:checked').forEach(cb => {
+    container.querySelectorAll('.ai-cb-merge:checked').forEach(cb => {
       const m = merges[parseInt(cb.dataset.index)];
       if (!m) return;
       const keep    = store.get(m.keepId);

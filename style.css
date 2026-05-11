@@ -2623,3 +2623,11 @@ body.board-mode #board-panel {
 .ai-struct-add:hover   { border-color: var(--accent); color: var(--accent); }
 .ai-struct-added       { border-color: var(--accent) !important; color: var(--accent) !important; opacity: .5; }
 .ai-struct-add-act     { border-color: var(--accent); color: var(--accent); }
+
+.ai-struct-checkbox {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; color: var(--text-muted); cursor: pointer;
+  letter-spacing: .03em;
+}
+.ai-struct-checkbox input { cursor: pointer; }
+.ai-struct-inline { border-top: 1px solid var(--panel-border); margin-top: 12px; padding-top: 12px; }
