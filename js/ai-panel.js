@@ -200,15 +200,15 @@ function renderStructureInput() {
   const tier     = getUserTier();
   const blocked  = tier === 'explorer' && _model === 'complex';
   const actCount = store.getStructure().length;
-  const charCount = _text.length;
-  const tooLong  = charCount > 12000;
+  const charCount  = _text.length;
+  const chunkCount = Math.ceil(charCount / 50000) || 1;
   return `<div class="ai-input-area">
     <div class="ai-analyze-desc">
       Paste text from your novel and the AI will identify acts, chapters, and scenes.
       ${actCount ? `You have <strong>${actCount}</strong> existing act${actCount !== 1 ? 's' : ''} — duplicates will be skipped.` : ''}
     </div>
     <textarea id="ai-textarea" placeholder="Paste novel text here…&#10;&#10;The AI will identify the narrative structure: acts, chapters, and scenes.">${esc(_text)}</textarea>
-    ${tooLong ? `<div class="ai-status-msg" style="color:var(--warning)">⚠ ${charCount.toLocaleString()} chars — only the first ~12,000 will be analysed. For best results, paste one or a few chapters at a time.</div>` : ''}
+    ${charCount > 50000 ? `<div class="ai-status-msg" style="color:var(--text-muted)">◈ ${charCount.toLocaleString()} chars — will process in ${chunkCount} chunks of ~50,000 with rolling context.</div>` : ''}
     ${_modelToggleHtml()}
     <button id="btn-ai-run" ${_loading || blocked || !_text.trim() ? 'disabled' : ''}>
       ${_loading ? '▤ Extracting structure…' : '▶ Extract Structure'}

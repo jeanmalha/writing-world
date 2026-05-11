@@ -283,9 +283,12 @@ def start_job(event, job_type):
         text = str(body.get('text', '')).strip()
         if not text:
             return out(400, {'error': 'text is required'})
-        # DynamoDB item limit is 400 KB; agent only reads first 15k chars anyway
-        item['text'] = text[:15000]
         existing_structure = body.get('existingStructure', [])
+        # Store text in S3 (avoids DynamoDB 400 KB limit; same pattern as PDF)
+        s3_key = f'structure-jobs/{job_id}.txt'
+        s3.put_object(Bucket=PDF_BUCKET, Key=s3_key,
+                      Body=text.encode('utf-8'), ContentType='text/plain; charset=utf-8')
+        item['s3Key'] = s3_key
         if existing_structure:
             item['existing'] = json.dumps(existing_structure)
 
@@ -794,7 +797,9 @@ def process(event, context):
             result = run_extract_pdf_agent(pages, existing, model_id, usage)
         elif job_type == 'extract-structure':
             existing_structure = json.loads(item.get('existing', '[]'))
-            result = run_structure_agent(item.get('text', ''), existing_structure, model_id, usage)
+            obj  = s3.get_object(Bucket=PDF_BUCKET, Key=item.get('s3Key', ''))
+            text = obj['Body'].read().decode('utf-8')
+            result = run_structure_agent(text, existing_structure, model_id, usage)
         else:
             result = run_analyze_agent(existing, model_id, usage)
 
@@ -1020,25 +1025,26 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
 # ── Structure extraction agent ────────────────────────────────────────────────
 
 def run_structure_agent(text: str, existing_structure: list, model_id: str, usage: dict = None) -> dict:
+    CHUNK_SIZE = 50_000  # chars ≈ 12,500 tokens — comfortable within Claude's context window
+
     state = {'acts': []}
 
-    # ── Tools use a flat "append to most-recent" pattern instead of integer
-    #    indices, which Bedrock's strict schema validation would reject when the
-    #    model passes a string ("0") instead of an int (0).
+    # ── Flat "append to most-recent" tools — no integer indices, which Bedrock
+    #    rejects when the model passes "0" (string) instead of 0 (int).
 
     @tool
     def add_act(title: str, description: str = '') -> str:
-        """Start a new act or major narrative part. Call this before any add_chapter calls for that act.
+        """Start a new act or major narrative part. Call this before add_chapter calls for that act.
         Args:
             title: concise act title, e.g. 'The Departure' or 'Part One'
             description: 1-2 sentences summarising what this act covers
         """
         state['acts'].append({'title': title, 'description': description, 'chapters': []})
-        return f"Act '{title}' started. Now call add_chapter for its chapters."
+        return f"Act '{title}' started."
 
     @tool
     def add_chapter(title: str, description: str = '') -> str:
-        """Add a chapter to the most recently started act. Call add_act first if no act exists.
+        """Add a chapter to the most recently started act.
         Args:
             title: concise chapter title, e.g. 'First Day at Sea'
             description: 1-2 sentences summarising what happens
@@ -1046,11 +1052,11 @@ def run_structure_agent(text: str, existing_structure: list, model_id: str, usag
         if not state['acts']:
             state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
         state['acts'][-1]['chapters'].append({'title': title, 'description': description, 'scenes': []})
-        return f"Chapter '{title}' added. Call add_scene for its scenes, or add_chapter for the next chapter."
+        return f"Chapter '{title}' added."
 
     @tool
     def add_scene(title: str, description: str = '') -> str:
-        """Add a scene to the most recently started chapter. Call add_chapter first if no chapter exists.
+        """Add a scene to the most recently started chapter.
         Args:
             title: concise scene title, e.g. 'Morning Briefing' or 'Escape through the port'
             description: 1-2 sentences summarising what happens in this scene
@@ -1062,36 +1068,58 @@ def run_structure_agent(text: str, existing_structure: list, model_id: str, usag
         state['acts'][-1]['chapters'][-1]['scenes'].append({'title': title, 'description': description})
         return f"Scene '{title}' added."
 
+    def _struct_summary():
+        lines = []
+        for i, act in enumerate(state['acts']):
+            lines.append(f"  Act {i+1}: {act['title']}")
+            for j, ch in enumerate(act.get('chapters', [])):
+                lines.append(f"    Ch {j+1}: {ch['title']}")
+        return '\n'.join(lines) if lines else '  (none identified yet)'
+
+    system_prompt = (
+        "You are a narrative structure analyst processing a novel in chunks.\n\n"
+        "CALL ORDER — always follow this sequence:\n"
+        "1. add_act — once per major division (Part, Act, or a single unnamed act)\n"
+        "2. add_chapter — once per chapter, in reading order\n"
+        "3. add_scene — once per distinct scene or beat within a chapter\n\n"
+        "Each tool appends to the MOST RECENTLY created parent. Never skip levels.\n"
+        "Give descriptive titles (2–6 words). Summarise what actually happens.\n"
+        "STRUCTURE SO FAR shows what has already been recorded — do not re-add those items.\n"
+        "Continue from where the previous chunk ended. Process every chapter visible in this chunk."
+    )
+
+    # Pre-existing structure to skip (first chunk only)
     existing_ctx = ''
     if existing_structure:
-        lines = ['EXISTING BOOK STRUCTURE (do not duplicate these):']
+        lines = ['PRE-EXISTING STRUCTURE (already in the database — skip these completely):']
         for i, act in enumerate(existing_structure):
             lines.append(f"  Act {i+1}: {act.get('title','')}")
             for j, ch in enumerate(act.get('chapters', [])):
                 lines.append(f"    Ch {j+1}: {ch.get('title','')}")
         existing_ctx = '\n'.join(lines) + '\n\n'
 
-    agent = Agent(
-        model=BedrockModel(model_id=model_id),
-        tools=[add_act, add_chapter, add_scene],
-        system_prompt=(
-            "You are a narrative structure analyst. Identify the hierarchical structure of novel text.\n\n"
-            "CALL ORDER — always follow this sequence:\n"
-            "1. add_act — once per major division (Part One, Act I, or a single unnamed act for the whole text)\n"
-            "2. add_chapter — once per chapter or section, in reading order\n"
-            "3. add_scene — once per distinct scene or beat within a chapter\n\n"
-            "Each tool adds to the MOST RECENTLY created parent. Never skip levels.\n"
-            "Give titles that are descriptive (2–6 words), not bare numbers like 'Chapter 1'.\n"
-            "Write descriptions summarising what actually happens in the text.\n"
-            "If the text is a single chapter, create one act and one chapter, then its scenes.\n"
-            "Do not duplicate items already in the existing structure."
-        ),
-    )
+    chunks = [text[i:i + CHUNK_SIZE] for i in range(0, max(len(text), 1), CHUNK_SIZE)]
 
-    # Only send as much text as the model can handle well
-    r = agent(f"{existing_ctx}Analyse this novel text and use add_act, add_chapter, and add_scene "
-              f"to record its complete narrative structure:\n\n{text[:12000]}")
-    _add_usage(r, usage)
+    for idx, chunk in enumerate(chunks):
+        # 400-char tail of previous chunk for narrative continuity
+        prev_tail = text[max(0, idx * CHUNK_SIZE - 400) : idx * CHUNK_SIZE] if idx > 0 else ''
+
+        prompt_parts = []
+        if idx == 0 and existing_ctx:
+            prompt_parts.append(existing_ctx)
+        prompt_parts.append(f"STRUCTURE SO FAR:\n{_struct_summary()}\n")
+        if prev_tail:
+            prompt_parts.append(f"END OF PREVIOUS CHUNK (for continuity):\n…{prev_tail}\n")
+        prompt_parts.append(f"CHUNK {idx + 1} OF {len(chunks)} — analyse and record structure:\n\n{chunk}")
+
+        # Fresh agent per chunk — tools share state via closure
+        agent = Agent(
+            model=BedrockModel(model_id=model_id),
+            tools=[add_act, add_chapter, add_scene],
+            system_prompt=system_prompt,
+        )
+        r = agent('\n'.join(prompt_parts))
+        _add_usage(r, usage)
 
     return {'acts': state['acts']}
 
