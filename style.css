@@ -2637,3 +2637,26 @@ body.board-mode #board-panel {
   background: none; border: 1px solid var(--warning); color: var(--warning); cursor: pointer;
 }
 .str-prune-btn:hover { background: rgba(245,158,11,0.08); }
+
+/* ── Graph view ──────────────────────────────────────────── */
+body.graph-mode #detail-content { padding: 0; overflow: hidden; }
+
+.graph-section { padding: 8px 10px; border-bottom: 1px solid var(--panel-border); }
+.graph-section-title {
+  font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 6px;
+}
+.graph-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text); cursor: pointer;
+  padding: 3px 0; user-select: none;
+}
+.graph-toggle input { cursor: pointer; flex-shrink: 0; }
+.graph-toggle-name { flex: 1; }
+.graph-toggle-count { font-size: 10px; color: var(--text-muted); }
+
+/* SVG elements */
+.gedge { transition: opacity 0.15s; }
+.gedge-label { font-family: 'Courier New', monospace; pointer-events: none; }
+.gnode circle { transition: r 0.2s; }
+.gnode:hover circle { filter: brightness(1.3); }

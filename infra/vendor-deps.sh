@@ -39,6 +39,7 @@ npm install \
   @huggingface/transformers \
   onnxruntime-web \
   onnxruntime-common \
+  d3-force d3-drag d3-zoom d3-selection \
   esbuild \
   --prefix "$WORK" --no-save --silent 2>/dev/null
 
@@ -47,10 +48,17 @@ ORT_VER=$(node -p "require('$WORK/node_modules/onnxruntime-web/package.json').ve
 info "  @huggingface/transformers: $TFM_VER  onnxruntime-web: $ORT_VER"
 
 # ── Build self-contained ESM bundle ───────────────────────────────────────────
-info "Building lore-ai.mjs with esbuild…"
+info "Building lore-ai.mjs and d3.mjs with esbuild…"
 
 cat > "$WORK/entry.mjs" << 'ENTRY'
 export { pipeline, TextStreamer, env } from '@huggingface/transformers';
+ENTRY
+
+cat > "$WORK/d3-entry.mjs" << 'ENTRY'
+export { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force';
+export { drag }          from 'd3-drag';
+export { zoom }          from 'd3-zoom';
+export { select }        from 'd3-selection';
 ENTRY
 
 cat > "$WORK/ort-webgpu-entry.mjs" << 'ENTRY'
@@ -62,10 +70,11 @@ ESBUILD_FLAGS=(--bundle --format=esm --platform=browser --conditions=browser
                --target=es2022 --external:'*.wasm'
                --define:process.env.NODE_ENV='"production"' --log-level=warning)
 
-"$ESBUILD" "$WORK/entry.mjs"          "${ESBUILD_FLAGS[@]}" --outfile="$WORK/lore-ai.mjs"
+"$ESBUILD" "$WORK/entry.mjs"            "${ESBUILD_FLAGS[@]}" --outfile="$WORK/lore-ai.mjs"
 "$ESBUILD" "$WORK/ort-webgpu-entry.mjs" "${ESBUILD_FLAGS[@]}" --outfile="$WORK/ort-webgpu.mjs"
+"$ESBUILD" "$WORK/d3-entry.mjs"         "${ESBUILD_FLAGS[@]}" --outfile="$WORK/d3.mjs"
 
-success "Bundles built: lore-ai $(du -sh "$WORK/lore-ai.mjs"|cut -f1)  ort-webgpu $(du -sh "$WORK/ort-webgpu.mjs"|cut -f1)"
+success "Bundles built: lore-ai $(du -sh "$WORK/lore-ai.mjs"|cut -f1)  ort-webgpu $(du -sh "$WORK/ort-webgpu.mjs"|cut -f1)  d3 $(du -sh "$WORK/d3.mjs"|cut -f1)"
 
 # ── Upload to S3 ──────────────────────────────────────────────────────────────
 upload_js() {
@@ -90,6 +99,7 @@ ORT="$WORK/node_modules/onnxruntime-web/dist"
 info "Uploading to S3…"
 upload_js "$WORK/lore-ai.mjs"    "lore-ai.mjs"
 upload_js "$WORK/ort-webgpu.mjs" "ort-webgpu.mjs"
+upload_js "$WORK/d3.mjs"         "d3.mjs"
 
 # WASM binaries must sit at /vendor/ (same dir as the bundle) so ORT's
 # import.meta.url-based resolution finds them automatically.
@@ -104,15 +114,17 @@ success "All files uploaded."
 # ── Patch index.html importmap ────────────────────────────────────────────────
 AI_URL="https://${DOMAIN}/vendor/lore-ai.mjs"
 ORT_WEBGPU_URL="https://${DOMAIN}/vendor/ort-webgpu.mjs"
+D3_URL="https://${DOMAIN}/vendor/d3.mjs"
 
-python3 - "$APP_DIR/index.html" "$AI_URL" "$ORT_WEBGPU_URL" << 'PYEOF'
+python3 - "$APP_DIR/index.html" "$AI_URL" "$ORT_WEBGPU_URL" "$D3_URL" << 'PYEOF'
 import re, sys
-path, ai_url, ort_url = sys.argv[1], sys.argv[2], sys.argv[3]
+path, ai_url, ort_url, d3_url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 html = open(path).read()
 new_imports = (
   f'"imports": {{\n'
   f'      "@huggingface/transformers": "{ai_url}",\n'
-  f'      "onnxruntime-web/webgpu":    "{ort_url}"\n'
+  f'      "onnxruntime-web/webgpu":    "{ort_url}",\n'
+  f'      "d3":                        "{d3_url}"\n'
   f'    }}'
 )
 html = re.sub(r'"imports"\s*:\s*\{[^}]*\}', new_imports, html, flags=re.DOTALL)
@@ -122,5 +134,6 @@ PYEOF
 success "index.html importmap updated"
 echo "  @huggingface/transformers → $AI_URL"
 echo "  onnxruntime-web/webgpu   → $ORT_WEBGPU_URL"
+echo "  d3                       → $D3_URL"
 echo ""
 warn "Run ./infra/deploy.sh sync to push the updated index.html."
