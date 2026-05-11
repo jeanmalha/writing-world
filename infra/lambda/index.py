@@ -283,7 +283,8 @@ def start_job(event, job_type):
         text = str(body.get('text', '')).strip()
         if not text:
             return out(400, {'error': 'text is required'})
-        item['text'] = text
+        # DynamoDB item limit is 400 KB; agent only reads first 15k chars anyway
+        item['text'] = text[:15000]
         existing_structure = body.get('existingStructure', [])
         if existing_structure:
             item['existing'] = json.dumps(existing_structure)
@@ -1021,45 +1022,45 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
 def run_structure_agent(text: str, existing_structure: list, model_id: str, usage: dict = None) -> dict:
     state = {'acts': []}
 
+    # ── Tools use a flat "append to most-recent" pattern instead of integer
+    #    indices, which Bedrock's strict schema validation would reject when the
+    #    model passes a string ("0") instead of an int (0).
+
     @tool
     def add_act(title: str, description: str = '') -> str:
-        """Record a major act or part of the narrative (e.g. Act I, Part One, The Beginning).
+        """Start a new act or major narrative part. Call this before any add_chapter calls for that act.
         Args:
-            title: concise act title
-            description: 1-2 sentence summary of what this act covers
+            title: concise act title, e.g. 'The Departure' or 'Part One'
+            description: 1-2 sentences summarising what this act covers
         """
         state['acts'].append({'title': title, 'description': description, 'chapters': []})
-        return f"Act '{title}' recorded (index {len(state['acts'])-1})"
+        return f"Act '{title}' started. Now call add_chapter for its chapters."
 
     @tool
-    def add_chapter(act_index: int, title: str, description: str = '') -> str:
-        """Record a chapter or major section within an act.
+    def add_chapter(title: str, description: str = '') -> str:
+        """Add a chapter to the most recently started act. Call add_act first if no act exists.
         Args:
-            act_index: 0-based index of the act this chapter belongs to
-            title: concise chapter title
-            description: 1-2 sentence summary
+            title: concise chapter title, e.g. 'First Day at Sea'
+            description: 1-2 sentences summarising what happens
         """
-        while len(state['acts']) <= act_index:
-            state['acts'].append({'title': f'Act {len(state["acts"])+1}', 'description': '', 'chapters': []})
-        state['acts'][act_index]['chapters'].append({'title': title, 'description': description, 'scenes': []})
-        idx = len(state['acts'][act_index]['chapters']) - 1
-        return f"Chapter '{title}' added to act {act_index} (chapter index {idx})"
+        if not state['acts']:
+            state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
+        state['acts'][-1]['chapters'].append({'title': title, 'description': description, 'scenes': []})
+        return f"Chapter '{title}' added. Call add_scene for its scenes, or add_chapter for the next chapter."
 
     @tool
-    def add_scene(act_index: int, chapter_index: int, title: str, description: str = '') -> str:
-        """Record a scene or distinct narrative beat within a chapter.
+    def add_scene(title: str, description: str = '') -> str:
+        """Add a scene to the most recently started chapter. Call add_chapter first if no chapter exists.
         Args:
-            act_index: 0-based index of the parent act
-            chapter_index: 0-based index of the parent chapter within the act
-            title: concise scene title (what happens, e.g. 'Morning briefing', 'Escape from station')
-            description: 1-2 sentence summary
+            title: concise scene title, e.g. 'Morning Briefing' or 'Escape through the port'
+            description: 1-2 sentences summarising what happens in this scene
         """
-        try:
-            state['acts'][act_index]['chapters'][chapter_index]['scenes'].append(
-                {'title': title, 'description': description})
-            return f"Scene '{title}' recorded"
-        except IndexError:
-            return f"Error: act {act_index} chapter {chapter_index} not found"
+        if not state['acts']:
+            state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
+        if not state['acts'][-1]['chapters']:
+            state['acts'][-1]['chapters'].append({'title': 'Chapter 1', 'description': '', 'scenes': []})
+        state['acts'][-1]['chapters'][-1]['scenes'].append({'title': title, 'description': description})
+        return f"Scene '{title}' added."
 
     existing_ctx = ''
     if existing_structure:
@@ -1074,21 +1075,22 @@ def run_structure_agent(text: str, existing_structure: list, model_id: str, usag
         model=BedrockModel(model_id=model_id),
         tools=[add_act, add_chapter, add_scene],
         system_prompt=(
-            "You are a narrative structure analyst. Given novel text, identify its hierarchical structure.\n\n"
-            "An ACT is a major story division (beginning/middle/end, Part One/Two, or unnamed if the whole text is one act).\n"
-            "A CHAPTER is a chapter or section within an act.\n"
-            "A SCENE is a distinct scene or beat within a chapter — a change of location, time, or focus.\n\n"
-            "Rules:\n"
-            "- Always call add_act first, then add_chapter, then add_scene in order.\n"
-            "- If the text is a single chapter, create one act and one chapter, then its scenes.\n"
-            "- Give titles that are concise and descriptive (2–6 words), not chapter numbers.\n"
-            "- Write brief descriptions summarising what happens, not what could happen.\n"
-            "- Do not duplicate items that already exist in the provided structure."
+            "You are a narrative structure analyst. Identify the hierarchical structure of novel text.\n\n"
+            "CALL ORDER — always follow this sequence:\n"
+            "1. add_act — once per major division (Part One, Act I, or a single unnamed act for the whole text)\n"
+            "2. add_chapter — once per chapter or section, in reading order\n"
+            "3. add_scene — once per distinct scene or beat within a chapter\n\n"
+            "Each tool adds to the MOST RECENTLY created parent. Never skip levels.\n"
+            "Give titles that are descriptive (2–6 words), not bare numbers like 'Chapter 1'.\n"
+            "Write descriptions summarising what actually happens in the text.\n"
+            "If the text is a single chapter, create one act and one chapter, then its scenes.\n"
+            "Do not duplicate items already in the existing structure."
         ),
     )
 
-    r = agent(f"{existing_ctx}Analyse this novel text and call add_act, add_chapter, and add_scene "
-              f"to record its narrative structure:\n\n{text[:12000]}")
+    # Only send as much text as the model can handle well
+    r = agent(f"{existing_ctx}Analyse this novel text and use add_act, add_chapter, and add_scene "
+              f"to record its complete narrative structure:\n\n{text[:12000]}")
     _add_usage(r, usage)
 
     return {'acts': state['acts']}
