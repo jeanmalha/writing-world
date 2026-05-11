@@ -2318,6 +2318,17 @@ body.board-mode #board-panel {
 .admin-tier-save:disabled { opacity: .4; cursor: default; }
 .admin-tier-msg { font-size: .72rem; }
 
+/* ── Admin — Usage tab ───────────────────────────────────── */
+.usage-section { padding: 14px 12px; border-bottom: 1px solid var(--panel-border); }
+.usage-section:last-child { border-bottom: none; }
+.usage-section-title { font-size: .68rem; letter-spacing: .1em; color: var(--text-muted); margin-bottom: 10px; }
+.usage-period-row { display: flex; gap: 4px; margin-bottom: 12px; }
+.usage-period-btn {
+  padding: 3px 10px; font-size: .72rem; background: none;
+  border: 1px solid var(--panel-border); color: var(--text-muted); cursor: pointer;
+}
+.usage-period-btn.active { border-color: var(--accent); color: var(--accent); }
+
 /* ── Admin — Interest tab ────────────────────────────────── */
 .admin-interest-wrap { padding: 14px 12px; display: flex; flex-direction: column; gap: 20px; }
 .admin-stat-row { display: flex; gap: 10px; }

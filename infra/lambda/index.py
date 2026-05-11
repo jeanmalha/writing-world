@@ -19,6 +19,7 @@ TIERS_TABLE          = os.environ.get('TIERS_TABLE', '')
 USER_POOL_ID         = os.environ.get('USER_POOL_ID', '')
 ATHENA_RESULTS_BUCKET = os.environ.get('ATHENA_RESULTS_BUCKET', '')
 FEATURES_TABLE        = os.environ.get('FEATURES_TABLE', '')
+VISITS_TABLE          = os.environ.get('VISITS_TABLE', '')
 SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS     = 2000
@@ -179,6 +180,10 @@ def handler(event, context):
         return get_features()
     if method == 'PUT'  and '/admin/features/' in path:
         return admin_update_feature(event, path.split('/')[-1])
+    if method == 'POST' and path.endswith('/telemetry'):
+        return record_visit(event)
+    if method == 'GET'  and path.endswith('/admin/visits'):
+        return admin_visits(event)
     if method == 'POST' and path.endswith('/interest'):
         return handle_interest(event)
     if method == 'GET'  and path.endswith('/world'):
@@ -555,6 +560,111 @@ def admin_usage(event):
 
         result.sort(key=lambda r: r['tokens30d'], reverse=True)
         return out(200, {'rows': result})
+    except Exception as e:
+        return out(500, {'error': str(e)})
+
+
+# ── Telemetry (visit beacon) ──────────────────────────────────────────────────
+
+def record_visit(event):
+    if not VISITS_TABLE:
+        return out(200, {'ok': True})
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(200, {'ok': True})
+
+    sid  = str(body.get('sid', ''))[:64]
+    uid  = str(body.get('uid', 'anon'))[:128]
+    auth = bool(body.get('auth', False))
+
+    if not sid:
+        return out(200, {'ok': True})
+
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    ttl   = int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp())
+
+    try:
+        ddb.Table(VISITS_TABLE).put_item(
+            Item={'date': today, 'sid': sid, 'uid': uid, 'auth': auth,
+                  'ts': datetime.now(timezone.utc).isoformat(), 'ttl': ttl},
+            ConditionExpression='attribute_not_exists(sid)',
+        )
+    except ddb.meta.client.exceptions.ConditionalCheckFailedException:
+        pass  # already recorded this session today
+    except Exception as e:
+        print(f'visit record failed: {e}')
+
+    return out(200, {'ok': True})
+
+
+def admin_visits(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    if not VISITS_TABLE:
+        return out(200, {'daily': [], 'weekly': [], 'monthly': []})
+
+    try:
+        today  = datetime.now(timezone.utc).date()
+        cutoff = (today - timedelta(days=90)).isoformat()
+
+        resp  = ddb.Table(VISITS_TABLE).scan(
+            FilterExpression='#d >= :cutoff',
+            ExpressionAttributeNames={'#d': 'date'},
+            ExpressionAttributeValues={':cutoff': cutoff},
+        )
+        rows = resp.get('Items', [])
+        while resp.get('LastEvaluatedKey'):
+            resp = ddb.Table(VISITS_TABLE).scan(
+                FilterExpression='#d >= :cutoff',
+                ExpressionAttributeNames={'#d': 'date'},
+                ExpressionAttributeValues={':cutoff': cutoff},
+                ExclusiveStartKey=resp['LastEvaluatedKey'],
+            )
+            rows.extend(resp.get('Items', []))
+
+        def _agg(buckets):
+            result = []
+            for label in sorted(buckets):
+                sessions = buckets[label]
+                total    = len(sessions)
+                auth     = sum(1 for s in sessions if s.get('auth'))
+                unauth   = total - auth
+                unique   = len({s['uid'] for s in sessions if s.get('auth')})
+                result.append({'label': label, 'total': total, 'auth': auth,
+                               'anon': unauth, 'unique': unique})
+            return result
+
+        daily, weekly, monthly = {}, {}, {}
+        for row in rows:
+            d = row.get('date', '')
+            if not d:
+                continue
+            # daily bucket: the date itself
+            daily.setdefault(d, []).append(row)
+            # weekly bucket: ISO week YYYY-Www
+            try:
+                dt   = datetime.strptime(d, '%Y-%m-%d').date()
+                week = f"{dt.isocalendar()[0]}-W{dt.isocalendar()[1]:02d}"
+                weekly.setdefault(week, []).append(row)
+                month = d[:7]  # YYYY-MM
+                monthly.setdefault(month, []).append(row)
+            except Exception:
+                pass
+
+        all_auth  = sum(1 for r in rows if r.get('auth'))
+        all_anon  = len(rows) - all_auth
+        all_unique = len({r['uid'] for r in rows if r.get('auth')})
+
+        return out(200, {
+            'daily':   list(reversed(_agg(daily)[-30:])),
+            'weekly':  list(reversed(_agg(weekly)[-12:])),
+            'monthly': list(reversed(_agg(monthly)[-12:])),
+            'totals90d': {
+                'total': len(rows), 'auth': all_auth,
+                'anon': all_anon, 'unique': all_unique,
+            },
+        })
     except Exception as e:
         return out(500, {'error': str(e)})
 

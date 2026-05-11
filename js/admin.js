@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest, getFeatures, updateAdminFeature } from './api.js';
+import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest, getAdminVisits, getFeatures, updateAdminFeature } from './api.js';
 
 let _tab = 'users';
 
@@ -343,34 +343,99 @@ async function _renderStatus(entityList, detailContent) {
 
 // ── Usage tab ──────────────────────────────────────────────────────────────
 
-async function _renderUsage(entityList) {
-  const { rows } = await getAdminUsage();
+let _visitPeriod = 'daily';
 
-  if (!rows.length) {
-    entityList.innerHTML = '<div class="empty-state">No usage data yet.</div>';
-    return;
-  }
+async function _renderUsage(entityList) {
+  const [visitsData, tokenData] = await Promise.all([getAdminVisits(), getAdminUsage()]);
+  _renderUsageHtml(entityList, visitsData, tokenData);
+}
+
+function _renderUsageHtml(entityList, visitsData, tokenData) {
+  const rows   = visitsData[_visitPeriod] || [];
+  const totals = visitsData.totals90d || { total: 0, auth: 0, anon: 0, unique: 0 };
 
   entityList.innerHTML = `
-    <table class="admin-table">
-      <thead>
-        <tr>
-          <th>User ID</th>
-          <th style="text-align:right">Today</th>
-          <th style="text-align:right">7 days</th>
-          <th style="text-align:right">30 days</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map(r => `
+    <div class="usage-section">
+      <div class="usage-section-title">VISITS</div>
+
+      <div class="usage-period-row">
+        <button class="usage-period-btn${_visitPeriod === 'daily'   ? ' active' : ''}" data-p="daily">Daily</button>
+        <button class="usage-period-btn${_visitPeriod === 'weekly'  ? ' active' : ''}" data-p="weekly">Weekly</button>
+        <button class="usage-period-btn${_visitPeriod === 'monthly' ? ' active' : ''}" data-p="monthly">Monthly</button>
+      </div>
+
+      <div class="admin-stat-row">
+        <div class="admin-stat-card">
+          <div class="admin-stat-value">${totals.total}</div>
+          <div class="admin-stat-label">Sessions (90d)</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-value" style="color:var(--accent)">${totals.auth}</div>
+          <div class="admin-stat-label">Authenticated (90d)</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-value">${totals.anon}</div>
+          <div class="admin-stat-label">Anonymous (90d)</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-value" style="color:#34d399">${totals.unique}</div>
+          <div class="admin-stat-label">Unique users (90d)</div>
+        </div>
+      </div>
+
+      ${rows.length ? `
+      <table class="admin-table">
+        <thead>
           <tr>
-            <td class="admin-uid">${_esc(r.userId)}</td>
-            <td style="text-align:right">${_fmtTok(r.tokens1d)}</td>
-            <td style="text-align:right">${_fmtTok(r.tokens7d)}</td>
-            <td style="text-align:right">${_fmtTok(r.tokens30d)}</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`;
+            <th>${_visitPeriod === 'daily' ? 'Date' : _visitPeriod === 'weekly' ? 'Week' : 'Month'}</th>
+            <th style="text-align:right">Sessions</th>
+            <th style="text-align:right">Auth</th>
+            <th style="text-align:right">Anon</th>
+            <th style="text-align:right">Unique users</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td>${_esc(r.label)}</td>
+              <td style="text-align:right">${r.total}</td>
+              <td style="text-align:right">${r.auth || '—'}</td>
+              <td style="text-align:right">${r.anon || '—'}</td>
+              <td style="text-align:right">${r.unique || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>` : '<div class="empty-state" style="padding:12px">No visit data yet.</div>'}
+    </div>
+
+    <div class="usage-section">
+      <div class="usage-section-title">AI TOKEN USAGE</div>
+      ${tokenData.rows?.length ? `
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th style="text-align:right">Today</th>
+            <th style="text-align:right">7 days</th>
+            <th style="text-align:right">30 days</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tokenData.rows.map(r => `
+            <tr>
+              <td class="admin-uid">${_esc(r.userId)}</td>
+              <td style="text-align:right">${_fmtTok(r.tokens1d)}</td>
+              <td style="text-align:right">${_fmtTok(r.tokens7d)}</td>
+              <td style="text-align:right">${_fmtTok(r.tokens30d)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>` : '<div class="empty-state" style="padding:12px">No AI usage yet.</div>'}
+    </div>`;
+
+  entityList.querySelectorAll('.usage-period-btn').forEach(btn =>
+    btn.addEventListener('click', () => {
+      _visitPeriod = btn.dataset.p;
+      _renderUsageHtml(entityList, visitsData, tokenData);
+    }));
 }
 
 // ── Features tab ───────────────────────────────────────────────────────────

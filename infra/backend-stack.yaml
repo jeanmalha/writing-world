@@ -228,6 +228,25 @@ Resources:
         - AttributeName: tierId
           AttributeType: S
 
+  VisitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: writing-world-visits
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+        - AttributeName: sid
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+        - AttributeName: sid
+          AttributeType: S
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
   # ── Cognito groups ────────────────────────────────────────────────────────────
 
   AdminsGroup:
@@ -346,6 +365,12 @@ Resources:
                 Resource: !GetAtt FeatureFlagsTable.Arn
               - Effect: Allow
                 Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                Resource: !GetAtt VisitsTable.Arn
+              - Effect: Allow
+                Action:
                   - athena:StartQueryExecution
                   - athena:StopQueryExecution
                   - athena:GetQueryExecution
@@ -396,6 +421,7 @@ Resources:
           USAGE_TABLE: !Ref UsageTable
           TIERS_TABLE: !Ref UsageTiersTable
           USER_POOL_ID: !Ref UserPool
+          VISITS_TABLE: !Ref VisitsTable
       Code:
         S3Bucket: !Ref LambdaBucket
         S3Key: lambda/extract.zip
@@ -425,6 +451,7 @@ Resources:
           USAGE_TABLE: !Ref UsageTable
           TIERS_TABLE: !Ref UsageTiersTable
           USER_POOL_ID: !Ref UserPool
+          VISITS_TABLE: !Ref VisitsTable
       Code:
         S3Bucket: !Ref LambdaBucket
         S3Key: lambda/extract.zip
@@ -673,6 +700,23 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/interest
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  PostTelemetryRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /telemetry
+      AuthorizationType: NONE
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetAdminVisitsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /admin/visits
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'

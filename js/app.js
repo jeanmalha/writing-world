@@ -10,7 +10,7 @@ import { renderGraphView }     from './graph.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
 import { initTheme, getTheme, setTheme } from './theme.js';
-import { getFeatures } from './api.js';
+import { getFeatures, postTelemetry } from './api.js';
 import { setAssistantModel } from './llm.js';
 
 // ── State ──────────────────────────────────────────────
@@ -897,6 +897,18 @@ searchInput.addEventListener('input', e => {
   }
 });
 
+function _fireTelemetry() {
+  try {
+    if (sessionStorage.getItem('lore_tel_sent')) return;
+    let sid = sessionStorage.getItem('lore_sid');
+    if (!sid) { sid = crypto.randomUUID(); sessionStorage.setItem('lore_sid', sid); }
+    const uid  = getUserSub() || 'anon';
+    const auth = isAuthenticated();
+    postTelemetry(sid, uid, auth);
+    sessionStorage.setItem('lore_tel_sent', '1');
+  } catch { /* ignore */ }
+}
+
 async function init() {
   if (isAuthEnabled && window.location.search.includes('code=')) {
     await handleCallback().catch(console.error);
@@ -914,6 +926,7 @@ async function init() {
     setAssistantModel(assistantFlag.model);
   }
 
+  _fireTelemetry();
   initSplash();
   initBoard(entityId => {
     const e = store.get(entityId);

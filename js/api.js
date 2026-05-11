@@ -172,6 +172,22 @@ export async function getAdminInterest() {
   return resp.json();
 }
 
+export async function getAdminVisits() {
+  const resp = await apiFetch('/admin/visits');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function postTelemetry(sid, uid, auth) {
+  try {
+    await fetch(`${AUTH_CONFIG.apiEndpoint}/telemetry`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ sid, uid, auth }),
+    });
+  } catch { /* fire and forget */ }
+}
+
 export async function updateAdminFeature(flagId, data) {
   const resp = await apiFetch(`/admin/features/${flagId}`, {
     method: 'PUT',
