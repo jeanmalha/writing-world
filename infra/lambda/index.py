@@ -1025,103 +1025,172 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
 # ── Structure extraction agent ────────────────────────────────────────────────
 
 def run_structure_agent(text: str, existing_structure: list, model_id: str, usage: dict = None) -> dict:
-    CHUNK_SIZE = 50_000  # chars ≈ 12,500 tokens — comfortable within Claude's context window
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    state = {'acts': []}
+    CHUNK_SIZE = 50_000  # chars ≈ 12,500 tokens
 
-    # ── Flat "append to most-recent" tools — no integer indices, which Bedrock
-    #    rejects when the model passes "0" (string) instead of 0 (int).
+    chunks = [text[i:i + CHUNK_SIZE] for i in range(0, max(len(text), 1), CHUNK_SIZE)]
+    total  = len(chunks)
 
-    @tool
-    def add_act(title: str, description: str = '') -> str:
-        """Start a new act or major narrative part. Call this before add_chapter calls for that act.
-        Args:
-            title: concise act title, e.g. 'The Departure' or 'Part One'
-            description: 1-2 sentences summarising what this act covers
-        """
-        state['acts'].append({'title': title, 'description': description, 'chapters': []})
-        return f"Act '{title}' started."
+    usage_lock = threading.Lock()
 
-    @tool
-    def add_chapter(title: str, description: str = '') -> str:
-        """Add a chapter to the most recently started act.
-        Args:
-            title: concise chapter title, e.g. 'First Day at Sea'
-            description: 1-2 sentences summarising what happens
-        """
-        if not state['acts']:
-            state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
-        state['acts'][-1]['chapters'].append({'title': title, 'description': description, 'scenes': []})
-        return f"Chapter '{title}' added."
-
-    @tool
-    def add_scene(title: str, description: str = '') -> str:
-        """Add a scene to the most recently started chapter.
-        Args:
-            title: concise scene title, e.g. 'Morning Briefing' or 'Escape through the port'
-            description: 1-2 sentences summarising what happens in this scene
-        """
-        if not state['acts']:
-            state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
-        if not state['acts'][-1]['chapters']:
-            state['acts'][-1]['chapters'].append({'title': 'Chapter 1', 'description': '', 'scenes': []})
-        state['acts'][-1]['chapters'][-1]['scenes'].append({'title': title, 'description': description})
-        return f"Scene '{title}' added."
-
-    def _struct_summary():
-        lines = []
-        for i, act in enumerate(state['acts']):
-            lines.append(f"  Act {i+1}: {act['title']}")
-            for j, ch in enumerate(act.get('chapters', [])):
-                lines.append(f"    Ch {j+1}: {ch['title']}")
-        return '\n'.join(lines) if lines else '  (none identified yet)'
-
-    system_prompt = (
-        "You are a narrative structure analyst processing a novel in chunks.\n\n"
-        "CALL ORDER — always follow this sequence:\n"
-        "1. add_act — once per major division (Part, Act, or a single unnamed act)\n"
+    EXTRACT_PROMPT = (
+        "You are a narrative structure analyst. Extract the structure from this chunk of a novel.\n\n"
+        "CALL ORDER:\n"
+        "1. add_act — once per major division visible in this chunk (Part, Act, or one act if the chunk has no clear division)\n"
         "2. add_chapter — once per chapter, in reading order\n"
         "3. add_scene — once per distinct scene or beat within a chapter\n\n"
         "Each tool appends to the MOST RECENTLY created parent. Never skip levels.\n"
-        "Give descriptive titles (2–6 words). Summarise what actually happens.\n"
-        "STRUCTURE SO FAR shows what has already been recorded — do not re-add those items.\n"
-        "Continue from where the previous chunk ended. Process every chapter visible in this chunk."
+        "Give descriptive titles (2–6 words). Summarise what actually happens in the text."
     )
 
-    # Pre-existing structure to skip (first chunk only)
+    def _make_extract_tools(chunk_state: dict):
+        @tool
+        def add_act(title: str, description: str = '') -> str:
+            """Start a new act or major narrative part.
+            Args:
+                title: concise act title (2-6 words)
+                description: 1-2 sentences summarising this act
+            """
+            chunk_state['acts'].append({'title': title, 'description': description, 'chapters': []})
+            return f"Act '{title}' started."
+
+        @tool
+        def add_chapter(title: str, description: str = '') -> str:
+            """Add a chapter to the most recently started act.
+            Args:
+                title: concise chapter title (2-6 words)
+                description: 1-2 sentences summarising what happens
+            """
+            if not chunk_state['acts']:
+                chunk_state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
+            chunk_state['acts'][-1]['chapters'].append({'title': title, 'description': description, 'scenes': []})
+            return f"Chapter '{title}' added."
+
+        @tool
+        def add_scene(title: str, description: str = '') -> str:
+            """Add a scene to the most recently started chapter.
+            Args:
+                title: concise scene title (2-6 words)
+                description: 1-2 sentences summarising what happens
+            """
+            if not chunk_state['acts']:
+                chunk_state['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
+            if not chunk_state['acts'][-1]['chapters']:
+                chunk_state['acts'][-1]['chapters'].append({'title': 'Chapter 1', 'description': '', 'scenes': []})
+            chunk_state['acts'][-1]['chapters'][-1]['scenes'].append({'title': title, 'description': description})
+            return f"Scene '{title}' added."
+
+        return add_act, add_chapter, add_scene
+
+    def extract_chunk(idx: int) -> tuple:
+        chunk_state = {'acts': []}
+        tools = _make_extract_tools(chunk_state)
+        agent = Agent(
+            model=BedrockModel(model_id=model_id),
+            tools=list(tools),
+            system_prompt=EXTRACT_PROMPT,
+        )
+        r = agent(f"CHUNK {idx + 1} OF {total}:\n\n{chunks[idx]}")
+        with usage_lock:
+            _add_usage(r, usage)
+        return idx, chunk_state['acts']
+
+    # ── Phase 1: parallel extraction ──────────────────────────────────────────
+    partial = [None] * total
+    with ThreadPoolExecutor(max_workers=min(total, 5)) as pool:
+        futures = {pool.submit(extract_chunk, i): i for i in range(total)}
+        for fut in as_completed(futures):
+            idx, acts = fut.result()
+            partial[idx] = acts
+
+    if total == 1:
+        return {'acts': partial[0] or []}
+
+    # ── Phase 2: merge agent ───────────────────────────────────────────────────
+    merged = {'acts': []}
+
+    @tool
+    def set_act(title: str, description: str = '') -> str:
+        """Add an act to the unified merged structure.
+        Args:
+            title: canonical act title
+            description: summary of this act
+        """
+        merged['acts'].append({'title': title, 'description': description, 'chapters': []})
+        return f"Act '{title}' added to merged structure."
+
+    @tool
+    def set_chapter(title: str, description: str = '') -> str:
+        """Add a chapter to the most recently added act in the merged structure.
+        Args:
+            title: canonical chapter title
+            description: summary of this chapter
+        """
+        if not merged['acts']:
+            merged['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
+        merged['acts'][-1]['chapters'].append({'title': title, 'description': description, 'scenes': []})
+        return f"Chapter '{title}' merged."
+
+    @tool
+    def set_scene(title: str, description: str = '') -> str:
+        """Add a scene to the most recently added chapter in the merged structure.
+        Args:
+            title: canonical scene title
+            description: summary of this scene
+        """
+        if not merged['acts']:
+            merged['acts'].append({'title': 'Act I', 'description': '', 'chapters': []})
+        if not merged['acts'][-1]['chapters']:
+            merged['acts'][-1]['chapters'].append({'title': 'Chapter 1', 'description': '', 'scenes': []})
+        merged['acts'][-1]['chapters'][-1]['scenes'].append({'title': title, 'description': description})
+        return f"Scene '{title}' merged."
+
+    # Format partial results for the merge prompt
+    parts_text = []
+    for i, acts in enumerate(partial):
+        lines = [f"=== CHUNK {i + 1} ==="]
+        for act in (acts or []):
+            lines.append(f"Act: {act['title']}" + (f" — {act.get('description','')}" if act.get('description') else ''))
+            for ch in act.get('chapters', []):
+                lines.append(f"  Chapter: {ch['title']}" + (f" — {ch.get('description','')}" if ch.get('description') else ''))
+                for sc in ch.get('scenes', []):
+                    lines.append(f"    Scene: {sc['title']}")
+        parts_text.append('\n'.join(lines))
+
     existing_ctx = ''
     if existing_structure:
-        lines = ['PRE-EXISTING STRUCTURE (already in the database — skip these completely):']
+        lines = ['PRE-EXISTING (already saved — omit from merged output):']
         for i, act in enumerate(existing_structure):
             lines.append(f"  Act {i+1}: {act.get('title','')}")
             for j, ch in enumerate(act.get('chapters', [])):
                 lines.append(f"    Ch {j+1}: {ch.get('title','')}")
         existing_ctx = '\n'.join(lines) + '\n\n'
 
-    chunks = [text[i:i + CHUNK_SIZE] for i in range(0, max(len(text), 1), CHUNK_SIZE)]
+    merge_agent = Agent(
+        model=BedrockModel(model_id=model_id),
+        tools=[set_act, set_chapter, set_scene],
+        system_prompt=(
+            "You are merging parallel narrative structure extractions from consecutive chunks of the same novel.\n\n"
+            "Rules:\n"
+            "- Chunks are in reading order. The novel flows from chunk 1 → chunk N.\n"
+            "- The same act may appear in multiple chunks — unify into one canonical act.\n"
+            "- A chapter split across a chunk boundary appears in both chunks — include it once.\n"
+            "- Every chapter and scene must appear exactly once in the merged output.\n"
+            "- Preserve reading order. Use set_act → set_chapter → set_scene in sequence.\n"
+            "- Omit anything listed as pre-existing."
+        ),
+    )
 
-    for idx, chunk in enumerate(chunks):
-        # 400-char tail of previous chunk for narrative continuity
-        prev_tail = text[max(0, idx * CHUNK_SIZE - 400) : idx * CHUNK_SIZE] if idx > 0 else ''
+    r = merge_agent(
+        f"{existing_ctx}"
+        f"Merge these {total} parallel extractions into one coherent structure:\n\n"
+        + '\n\n'.join(parts_text)
+    )
+    _add_usage(r, usage)
 
-        prompt_parts = []
-        if idx == 0 and existing_ctx:
-            prompt_parts.append(existing_ctx)
-        prompt_parts.append(f"STRUCTURE SO FAR:\n{_struct_summary()}\n")
-        if prev_tail:
-            prompt_parts.append(f"END OF PREVIOUS CHUNK (for continuity):\n…{prev_tail}\n")
-        prompt_parts.append(f"CHUNK {idx + 1} OF {len(chunks)} — analyse and record structure:\n\n{chunk}")
-
-        # Fresh agent per chunk — tools share state via closure
-        agent = Agent(
-            model=BedrockModel(model_id=model_id),
-            tools=[add_act, add_chapter, add_scene],
-            system_prompt=system_prompt,
-        )
-        r = agent('\n'.join(prompt_parts))
-        _add_usage(r, usage)
-
-    return {'acts': state['acts']}
+    return {'acts': merged['acts']}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
