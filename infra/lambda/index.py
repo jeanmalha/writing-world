@@ -359,9 +359,19 @@ def poll(job_id):
             status = 'error'
 
     resp = {'jobId': job_id, 'status': status, 'jobType': item.get('jobType', 'extract')}
-    if status == 'done':
-        resp['result'] = json.loads(item.get('result', '{}'))
-    elif status == 'error':
+    if status in ('done', 'error') and item.get('result'):
+        result = json.loads(item['result'])
+        # For structure jobs: merge chapter content from S3 back into acts
+        content_key = result.pop('contentS3Key', None)
+        if content_key and PDF_BUCKET:
+            try:
+                obj = s3.get_object(Bucket=PDF_BUCKET, Key=content_key)
+                content_map = json.loads(obj['Body'].read().decode('utf-8'))
+                _merge_content_into_structure(result, content_map)
+            except Exception as e:
+                print(f'Structure content fetch failed: {e}')
+        resp['result'] = result
+    if status == 'error':
         resp['error'] = item.get('error', 'Processing timed out or failed')
     return out(200, resp)
 
@@ -1057,6 +1067,14 @@ def process(event, context):
             obj  = s3.get_object(Bucket=PDF_BUCKET, Key=item.get('s3Key', ''))
             text = obj['Body'].read().decode('utf-8')
             result = run_structure_agent(text, existing_structure, model_id, usage)
+            # Text-split: assign chapter prose to content fields, store in S3
+            content_map = _split_text_by_chapters(text, result)
+            if content_map and PDF_BUCKET:
+                content_key = f'structure-jobs/{job_id}-content.json'
+                s3.put_object(Bucket=PDF_BUCKET, Key=content_key,
+                              Body=json.dumps(content_map, ensure_ascii=False).encode('utf-8'),
+                              ContentType='application/json')
+                result['contentS3Key'] = content_key
         else:
             result = run_analyze_agent(existing, model_id, usage)
 
@@ -1469,6 +1487,53 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
 
 
 # ── Structure extraction agent ────────────────────────────────────────────────
+
+def _split_text_by_chapters(text: str, structure: dict) -> dict:
+    """
+    Find each chapter title in the original text and extract the prose between
+    consecutive chapter titles. Returns {chapter_title: prose_text}.
+    """
+    import re
+    # Collect all chapter titles in reading order
+    titles = []
+    for act in structure.get('acts', []):
+        for ch in act.get('chapters', []):
+            if ch.get('title'):
+                titles.append(ch['title'])
+
+    if not titles:
+        return {}
+
+    # Find each title's position in the text (case-insensitive, allow minor whitespace)
+    positions = []
+    for title in titles:
+        pattern = re.compile(re.escape(title.strip()), re.IGNORECASE)
+        m = pattern.search(text)
+        if m:
+            positions.append((m.start(), title))
+
+    if not positions:
+        return {}
+
+    positions.sort(key=lambda x: x[0])
+
+    # Slice text between consecutive title positions
+    content_map = {}
+    for i, (start, title) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(text)
+        content_map[title] = text[start:end].strip()
+
+    return content_map
+
+
+def _merge_content_into_structure(structure: dict, content_map: dict) -> None:
+    """Attach content text to chapters in-place using title as key."""
+    for act in structure.get('acts', []):
+        for ch in act.get('chapters', []):
+            title = ch.get('title', '')
+            if title in content_map:
+                ch['content'] = content_map[title]
+
 
 def run_structure_agent(text: str, existing_structure: list, model_id: str, usage: dict = None) -> dict:
     import threading
