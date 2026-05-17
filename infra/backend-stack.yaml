@@ -302,6 +302,15 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: WritingWorldLambdaRole
+      Tags:
+        - Key: Project
+          Value: Lore
+        - Key: Application
+          Value: writing-world
+        - Key: Environment
+          Value: production
+        - Key: Owner
+          Value: jean
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
