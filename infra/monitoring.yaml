@@ -174,6 +174,9 @@ Resources:
               - Effect: Allow
                 Action: rum:PutRumEvents
                 Resource: !Sub 'arn:aws:rum:${AWS::Region}:${AWS::AccountId}:appmonitor/lore-monitor'
+              - Effect: Allow
+                Action: xray:PutTraceSegments
+                Resource: '*'
 
   RumIdentityPoolRoles:
     Type: AWS::Cognito::IdentityPoolRoleAttachment
@@ -190,7 +193,7 @@ Resources:
       CwLogEnabled: true
       AppMonitorConfiguration:
         AllowCookies: true
-        EnableXRay: false
+        EnableXRay: true
         SessionSampleRate: 1
         GuestRoleArn: !GetAtt RumGuestRole.Arn
         IdentityPoolId: !Ref RumIdentityPool
@@ -215,6 +218,50 @@ Resources:
       Period: 300
       EvaluationPeriods: 1
       Threshold: 20
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # SLO: page load time P75 under 3 seconds
+  RumPageLoadSloAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-RUM-SLO-PageLoad
+      AlarmDescription: >
+        SLO: 75th-percentile page load time exceeds 3 seconds.
+        Indicates slow CloudFront delivery or large asset loading.
+      Namespace: AWS/RUM
+      MetricName: NavigationFrustratedCount
+      Dimensions:
+        - Name: application_name
+          Value: lore-monitor
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # SLO: HTTP error rate — catches API failures users experience
+  RumHttpErrorSloAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-RUM-SLO-HttpErrors
+      AlarmDescription: >
+        SLO: More than 10 HTTP errors (4xx/5xx) experienced by users in 15 minutes.
+        Indicates broken API calls or failed asset loads.
+      Namespace: AWS/RUM
+      MetricName: Http4xxCount
+      Dimensions:
+        - Name: application_name
+          Value: lore-monitor
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 2
+      Threshold: 10
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
       AlarmActions:
