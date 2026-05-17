@@ -372,14 +372,15 @@ export const store = {
   exportJSON() {
     const proj = _proj();
     const _isEmpty = s => !s || !s.trim() || s === 'New Act' || s === 'New Chapter' || s === 'New Scene';
+    const _hasContent = x => x.content || x.description || (x.links||[]).length;
     const cleanStructure = (proj.structure || [])
       .map(act => ({
         ...act,
         chapters: (act.chapters || [])
-          .map(ch => ({ ...ch, scenes: (ch.scenes || []).filter(sc => !_isEmpty(sc.title) || sc.description || (sc.links||[]).length) }))
-          .filter(ch => !_isEmpty(ch.title) || ch.description || (ch.scenes||[]).length || (ch.links||[]).length),
+          .map(ch => ({ ...ch, scenes: (ch.scenes || []).filter(sc => !_isEmpty(sc.title) || _hasContent(sc)) }))
+          .filter(ch => !_isEmpty(ch.title) || _hasContent(ch) || (ch.scenes||[]).length),
       }))
-      .filter(act => !_isEmpty(act.title) || act.description || (act.chapters||[]).length);
+      .filter(act => !_isEmpty(act.title) || _hasContent(act) || (act.chapters||[]).length);
     const out = {
       version:             1,
       entities:            proj.entities,
@@ -455,7 +456,7 @@ export const store = {
 
   addAct(title = 'New Act') {
     if (!_proj().structure) _proj().structure = [];
-    const act = { id: crypto.randomUUID(), title, description: '', chapters: [] };
+    const act = { id: crypto.randomUUID(), title, description: '', content: '', chapters: [] };
     _proj().structure.push(act);
     persist(_data);
     return act;
@@ -482,7 +483,7 @@ export const store = {
   addChapter(actId, title = 'New Chapter') {
     const act = (_proj().structure || []).find(a => a.id === actId);
     if (!act) return null;
-    const ch = { id: crypto.randomUUID(), title, description: '', notes: '', links: [], scenes: [] };
+    const ch = { id: crypto.randomUUID(), title, description: '', notes: '', content: '', links: [], scenes: [] };
     act.chapters.push(ch);
     persist(_data);
     return ch;
@@ -515,7 +516,7 @@ export const store = {
     const ch  = act?.chapters?.find(c => c.id === chapterId);
     if (!ch) return null;
     if (!ch.scenes) ch.scenes = [];
-    const sc = { id: crypto.randomUUID(), title, description: '', notes: '', links: [] };
+    const sc = { id: crypto.randomUUID(), title, description: '', notes: '', content: '', links: [] };
     ch.scenes.push(sc);
     persist(_data);
     return sc;
@@ -605,7 +606,8 @@ export const store = {
   },
 
   pruneStructure() {
-    const isEmpty = s => !s || !s.trim() || s === 'New Act' || s === 'New Chapter' || s === 'New Scene';
+    const isEmpty   = s => !s || !s.trim() || s === 'New Act' || s === 'New Chapter' || s === 'New Scene';
+    const hasContent = x => x.content || x.description || (x.links || []).length;
     const proj = _proj();
     proj.structure = (proj.structure || [])
       .map(act => ({
@@ -613,14 +615,11 @@ export const store = {
         chapters: (act.chapters || [])
           .map(ch => ({
             ...ch,
-            scenes: (ch.scenes || []).filter(sc =>
-              !isEmpty(sc.title) || sc.description || (sc.links || []).length),
+            scenes: (ch.scenes || []).filter(sc => !isEmpty(sc.title) || hasContent(sc)),
           }))
-          .filter(ch =>
-            !isEmpty(ch.title) || ch.description || (ch.scenes || []).length || (ch.links || []).length),
+          .filter(ch => !isEmpty(ch.title) || hasContent(ch) || (ch.scenes || []).length),
       }))
-      .filter(act =>
-        !isEmpty(act.title) || act.description || (act.chapters || []).length);
+      .filter(act => !isEmpty(act.title) || hasContent(act) || (act.chapters || []).length);
     persist(_data);
     return proj.structure.reduce((n, a) => n + (a.chapters || []).length, 0);
   },

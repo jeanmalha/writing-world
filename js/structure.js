@@ -12,9 +12,11 @@ export function renderStructureView(listHeader, entityList, detailContent) {
   _listEl   = entityList;
   _detailEl = detailContent;
 
+  const _isBlank = x => (!x.title || ['New Act','New Chapter','New Scene'].includes(x.title))
+    && !x.content && !x.description && !(x.links||[]).length;
   const emptyCount = store.getStructure()
-    .flatMap(a => a.chapters || [])
-    .filter(ch => !ch.title || ch.title === 'New Chapter').length;
+    .flatMap(a => [a, ...(a.chapters || []).flatMap(ch => [ch, ...(ch.scenes || [])])])
+    .filter(_isBlank).length;
 
   listHeader.innerHTML = `<div class="list-header-row">
     <span class="list-title">Structure</span>
@@ -185,6 +187,8 @@ function _renderDetail(el) {
     return;
   }
 
+  const wc = _wordCount(item.content || '');
+
   el.innerHTML = `<div class="str-detail-form">
     <div class="str-breadcrumb">${breadcrumb}</div>
     <div class="detail-type-badge" style="color:var(--accent)">${label}</div>
@@ -196,7 +200,16 @@ function _renderDetail(el) {
 
     <div class="str-field">
       <label class="str-label">Description</label>
-      <textarea class="str-textarea" id="str-inp-desc" rows="4" placeholder="Summary or description…">${_esc(item.description || '')}</textarea>
+      <textarea class="str-textarea" id="str-inp-desc" rows="3" placeholder="Summary or description…">${_esc(item.description || '')}</textarea>
+    </div>
+
+    <div class="str-field">
+      <div class="str-content-header">
+        <label class="str-label">Content</label>
+        <span class="str-wordcount" id="str-wc">${wc ? `${wc.toLocaleString()} w` : ''}</span>
+      </div>
+      <textarea class="str-textarea str-content-area" id="str-inp-content" rows="18"
+        placeholder="Write the prose here…">${_esc(item.content || '')}</textarea>
     </div>
 
     ${hasNotes ? `<div class="str-field">
@@ -207,11 +220,19 @@ function _renderDetail(el) {
     ${hasLinks ? _linksHtml(item.links || [], actId, chapterId, sceneId) : ''}
   </div>`;
 
+  // Live word count while typing
+  document.getElementById('str-inp-content')?.addEventListener('input', e => {
+    const wc = _wordCount(e.target.value);
+    const wcEl = document.getElementById('str-wc');
+    if (wcEl) wcEl.textContent = wc ? `${wc.toLocaleString()} w` : '';
+  });
+
   // Autosave on blur
   const save = () => {
     const fields = {
-      title:       document.getElementById('str-inp-title')?.value  || '',
-      description: document.getElementById('str-inp-desc')?.value   || '',
+      title:       document.getElementById('str-inp-title')?.value   || '',
+      description: document.getElementById('str-inp-desc')?.value    || '',
+      content:     document.getElementById('str-inp-content')?.value || '',
       ...(hasNotes ? { notes: document.getElementById('str-inp-notes')?.value || '' } : {}),
     };
     if (type === 'act')     store.updateAct(actId, fields);
@@ -372,3 +393,7 @@ function _esc(s) {
 const _ROMAN = ['', 'I','II','III','IV','V','VI','VII','VIII','IX','X',
                     'XI','XII','XIII','XIV','XV','XVI','XVII','XVIII','XIX','XX'];
 function _roman(n) { return _ROMAN[n] || String(n); }
+
+function _wordCount(text) {
+  return text ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+}

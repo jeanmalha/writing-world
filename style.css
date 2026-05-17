@@ -2512,6 +2512,19 @@ body.board-mode #board-panel {
 }
 .str-textarea:focus { border-color: var(--accent); }
 
+.str-content-header { display: flex; justify-content: space-between; align-items: baseline; }
+.str-wordcount { font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.str-content-area {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.8;
+  min-height: 300px;
+  resize: vertical;
+  background: var(--bg);
+  border-color: var(--border-subtle, var(--panel-border));
+}
+.str-content-area:focus { border-color: var(--accent); }
+
 /* Links */
 .str-links-section { display: flex; flex-direction: column; gap: 8px; }
 .str-links-empty   { font-size: 11px; color: var(--text-muted); }
