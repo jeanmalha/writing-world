@@ -1,4 +1,5 @@
 import { store, TYPES } from './store.js';
+import { startExtraction, pollJob } from './api.js';
 
 // ── Module state ───────────────────────────────────────────────────────────────
 // sel = null | { type:'act'|'chapter'|'scene', actId, chapterId?, sceneId? }
@@ -218,6 +219,13 @@ function _renderDetail(el) {
     </div>` : ''}
 
     ${hasLinks ? _linksHtml(item.links || [], actId, chapterId, sceneId) : ''}
+
+    ${item.content ? `<div class="str-extract-bar">
+      <button class="str-extract-btn" id="str-btn-extract" title="Extract entities from this content">
+        ◈ Extract entities
+      </button>
+      <span class="str-extract-status" id="str-extract-status"></span>
+    </div>` : ''}
   </div>`;
 
   // Live word count while typing
@@ -245,6 +253,52 @@ function _renderDetail(el) {
     inp.addEventListener('blur', save));
 
   if (hasLinks) _wireLinks(el, actId, chapterId, sceneId);
+
+  document.getElementById('str-btn-extract')?.addEventListener('click', async () => {
+    const btn     = document.getElementById('str-btn-extract');
+    const status  = document.getElementById('str-extract-status');
+    const content = document.getElementById('str-inp-content')?.value || item.content || '';
+    if (!content.trim()) return;
+
+    btn.disabled = true;
+    status.textContent = 'Starting…';
+
+    try {
+      const existing = store.getAll().map(e => ({
+        id: e.id, type: e.type, name: e.name, description: e.description || '',
+        role: e.role || '', links: e.links || [],
+      }));
+      const { jobId } = await startExtraction(content, existing, 'simple');
+
+      let dots = 0;
+      const poll = setInterval(async () => {
+        try {
+          const job = await pollJob('extract', jobId);
+          if (job.status === 'done' || job.status === 'error') {
+            clearInterval(poll);
+            btn.disabled = false;
+            if (job.status === 'error') {
+              status.textContent = `✗ ${job.error || 'Failed'}`;
+              return;
+            }
+            const r = job.result || {};
+            const creates = (r.creates || []).length;
+            const updates = (r.updates || []).length;
+            // Auto-import creates (new entities only — no UI needed for a quick extract)
+            _importExtractResult(r);
+            status.textContent = `✓ ${creates} new, ${updates} updated`;
+            setTimeout(() => { status.textContent = ''; }, 5000);
+          } else {
+            dots = (dots + 1) % 4;
+            status.textContent = 'Extracting' + '.'.repeat(dots + 1);
+          }
+        } catch { clearInterval(poll); btn.disabled = false; status.textContent = '✗ Poll failed'; }
+      }, 3000);
+    } catch (e) {
+      btn.disabled = false;
+      status.textContent = `✗ ${e.message}`;
+    }
+  });
 }
 
 // ── Links section ──────────────────────────────────────────────────────────────
@@ -396,4 +450,29 @@ function _roman(n) { return _ROMAN[n] || String(n); }
 
 function _wordCount(text) {
   return text ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+}
+
+function _importExtractResult(result) {
+  const nameToId = {};
+  store.getAll().forEach(e => { if (e.name) nameToId[e.name.toLowerCase()] = e.id; });
+
+  for (const item of (result.creates || [])) {
+    const entity = store.create(item.type, {
+      name: item.name, description: item.description || '',
+      role: item.role || '', locType: item.locType || '',
+      date: item.date || '', importance: item.importance || '',
+      gender: item.gender || '', skinTone: item.skinTone || '',
+      hairStyle: item.hairStyle || '', hairColor: item.hairColor || '',
+      eyeColor: item.eyeColor || '',
+    });
+    if (entity?.name) nameToId[entity.name.toLowerCase()] = entity.id;
+  }
+  for (const upd of (result.updates || [])) {
+    if (store.get(upd.id)) store.update(upd.id, upd.changes);
+  }
+  for (const l of (result.links || [])) {
+    const src = nameToId[l.sourceName?.toLowerCase()];
+    const tgt = nameToId[l.targetName?.toLowerCase()];
+    if (src && tgt && src !== tgt) store.addLink(src, tgt, l.label);
+  }
 }

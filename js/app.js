@@ -722,17 +722,28 @@ async function initCloudSync() {
         store.mergeContent(cloud.content || {});
         renderAll();
       } else if (cloudAt > localAt) {
-        // Cloud is newer — load it
+        // Cloud is newer — preserve local content before wiping, then merge both
+        const localContent = store.extractContent();
         store.loadData(cloud.data);
-        store.mergeContent(cloud.content || {});
+        // Cloud content wins where it exists; local fills in anything S3 doesn't have
+        store.mergeContent({ ...localContent, ...(cloud.content || {}) });
+        // If local had content that isn't in S3 yet, push it up
+        if (Object.keys(localContent).length) {
+          await saveWorld(store.exportDataWithoutContent(), store.extractContent()).catch(() => {});
+        }
         renderAll();
         showBanner('Loaded your world from cloud.', 4000);
       } else if (localAt > cloudAt) {
         // Local is newer — push it up silently
         await saveWorld(store.exportDataWithoutContent(), store.extractContent());
         _cloudStatus = 'synced'; updateStatus();
+      } else {
+        // Equal timestamps — entities match, but local content may not be in S3 yet
+        const localContent = store.extractContent();
+        if (Object.keys(localContent).length && !Object.keys(cloud.content || {}).length) {
+          await saveWorld(store.exportDataWithoutContent(), localContent).catch(() => {});
+        }
       }
-      // If equal, do nothing
     } else if (store.totalCount()) {
       // No cloud save yet — push local up
       await saveWorld(store.exportDataWithoutContent(), store.extractContent());

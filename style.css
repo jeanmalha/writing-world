@@ -2564,6 +2564,15 @@ body.board-mode #board-panel {
 }
 .str-textarea:focus { border-color: var(--accent); }
 
+.str-extract-bar    { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
+.str-extract-btn    {
+  font-family: var(--font); font-size: .72rem; padding: 4px 12px;
+  background: none; border: 1px solid var(--accent); color: var(--accent); cursor: pointer;
+}
+.str-extract-btn:hover:not(:disabled) { background: var(--accent-dim, rgba(59,130,246,.08)); }
+.str-extract-btn:disabled { opacity: .4; cursor: default; }
+.str-extract-status { font-size: .72rem; color: var(--text-muted); }
+
 .str-content-header { display: flex; justify-content: space-between; align-items: baseline; }
 .str-wordcount { font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .str-content-area {
