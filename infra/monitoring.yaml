@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Writing World — Cost budget alert + CloudFront monitoring
-  Deploys to us-east-1 (required for CloudFront metrics & budgets)
+  Writing World — Budget alerts, CloudFront alarms, RUM, and Synthetics canaries.
+  Deploys to us-east-1 (required for CloudFront metrics, budgets, and RUM).
 
 Parameters:
   AlertEmail:
@@ -16,6 +16,15 @@ Parameters:
   DistributionId:
     Type: String
     Description: CloudFront Distribution ID (from writing-world stack output)
+
+  Domain:
+    Type: String
+    Default: lore.malha.land
+    Description: The app domain (for RUM AppMonitor and frontend canary)
+
+  ApiEndpoint:
+    Type: String
+    Description: API Gateway base URL e.g. https://xxxx.execute-api.us-east-1.amazonaws.com/api
 
 Resources:
 
@@ -129,6 +138,256 @@ Resources:
       AlarmActions:
         - !Ref AlertTopic
 
+  # ── CloudWatch RUM ────────────────────────────────────────────────────────────
+
+  # Unauthenticated identity pool — browser sends telemetry without signing in
+  RumIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: LoreRumPool
+      AllowUnauthenticatedIdentities: true
+
+  RumGuestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LoreRumGuestRole
+      Tags:
+        - Key: Project
+          Value: Lore
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                cognito-identity.amazonaws.com:aud: !Ref RumIdentityPool
+              ForAnyValue:StringLike:
+                cognito-identity.amazonaws.com:amr: unauthenticated
+      Policies:
+        - PolicyName: RumPutEvents
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rum:PutRumEvents
+                Resource: !Sub 'arn:aws:rum:${AWS::Region}:${AWS::AccountId}:appmonitor/lore-monitor'
+
+  RumIdentityPoolRoles:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref RumIdentityPool
+      Roles:
+        unauthenticated: !GetAtt RumGuestRole.Arn
+
+  RumAppMonitor:
+    Type: AWS::RUM::AppMonitor
+    Properties:
+      Name: lore-monitor
+      Domain: !Ref Domain
+      CwLogEnabled: true
+      AppMonitorConfiguration:
+        AllowCookies: true
+        EnableXRay: false
+        SessionSampleRate: 1
+        GuestRoleArn: !GetAtt RumGuestRole.Arn
+        IdentityPoolId: !Ref RumIdentityPool
+        Telemetries:
+          - errors
+          - http
+          - performance
+
+  RumJsErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-RUM-JsErrors
+      AlarmDescription: >
+        More than 20 JS errors in a 5-minute window detected by CloudWatch RUM.
+        Check the RUM console for stack traces.
+      Namespace: AWS/RUM
+      MetricName: JsErrorCount
+      Dimensions:
+        - Name: application_name
+          Value: lore-monitor
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 20
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # ── CloudWatch Synthetics ─────────────────────────────────────────────────────
+
+  CanaryArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'lore-canary-artifacts-${AWS::AccountId}'
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  SyntheticsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LoreSyntheticsRole
+      Tags:
+        - Key: Project
+          Value: Lore
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SyntheticsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:ListAllMyBuckets
+                Resource:
+                  - !GetAtt CanaryArtifactBucket.Arn
+                  - !Sub '${CanaryArtifactBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CloudWatchSynthetics
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cwsyn-*'
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                Resource: '*'
+
+  FrontendCanary:
+    Type: AWS::Synthetics::Canary
+    Properties:
+      Name: lore-frontend
+      RuntimeVersion: syn-nodejs-puppeteer-9.0
+      ArtifactS3Location: !Sub 's3://${CanaryArtifactBucket}/frontend'
+      ExecutionRoleArn: !GetAtt SyntheticsRole.Arn
+      StartCanaryAfterCreation: true
+      Schedule:
+        Expression: rate(5 minutes)
+      RunConfig:
+        TimeoutInSeconds: 60
+        EnvironmentVariables:
+          FRONTEND_URL: !Sub 'https://${Domain}'
+      Code:
+        Handler: index.handler
+        Script: |
+          const synthetics = require('Synthetics');
+          const log = require('SyntheticsLogger');
+          exports.handler = async function () {
+              const url = process.env.FRONTEND_URL;
+              await synthetics.executeStep('FrontendLoads', async function () {
+                  let page = await synthetics.getPage();
+                  const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                  if (!response) throw new Error('No response from ' + url);
+                  if (response.status() !== 200) throw new Error('HTTP ' + response.status() + ' from ' + url);
+                  const title = await page.title();
+                  log.info('Page title: ' + title);
+              });
+          };
+
+  ApiCanary:
+    Type: AWS::Synthetics::Canary
+    Properties:
+      Name: lore-api
+      RuntimeVersion: syn-nodejs-puppeteer-9.0
+      ArtifactS3Location: !Sub 's3://${CanaryArtifactBucket}/api'
+      ExecutionRoleArn: !GetAtt SyntheticsRole.Arn
+      StartCanaryAfterCreation: true
+      Schedule:
+        Expression: rate(5 minutes)
+      RunConfig:
+        TimeoutInSeconds: 30
+        EnvironmentVariables:
+          API_ENDPOINT: !Ref ApiEndpoint
+      Code:
+        Handler: index.handler
+        Script: |
+          const synthetics = require('Synthetics');
+          const https = require('https');
+          exports.handler = async function () {
+              const endpoint = process.env.API_ENDPOINT;
+              await synthetics.executeStep('ApiFeaturesResponds', function () {
+                  return new Promise((resolve, reject) => {
+                      const url = endpoint + '/features';
+                      const req = https.get(url, (res) => {
+                          let body = '';
+                          res.on('data', d => body += d);
+                          res.on('end', () => {
+                              if (res.statusCode !== 200) {
+                                  reject(new Error('GET /features returned ' + res.statusCode));
+                              } else {
+                                  resolve();
+                              }
+                          });
+                      });
+                      req.on('error', reject);
+                      req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+                  });
+              });
+          };
+
+  FrontendCanaryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-Canary-Frontend
+      AlarmDescription: Frontend canary failing — lore.malha.land may be down.
+      Namespace: CloudWatchSynthetics
+      MetricName: SuccessPercent
+      Dimensions:
+        - Name: CanaryName
+          Value: lore-frontend
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 100
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  ApiCanaryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WritingWorld-Canary-Api
+      AlarmDescription: API canary failing — backend may be down or misconfigured.
+      Namespace: CloudWatchSynthetics
+      MetricName: SuccessPercent
+      Dimensions:
+        - Name: CanaryName
+          Value: lore-api
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 100
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref AlertTopic
+
 Outputs:
   AlertTopicArn:
     Value: !Ref AlertTopic
@@ -137,3 +396,19 @@ Outputs:
   BudgetName:
     Value: WritingWorldMonthlyBudget
     Description: View in AWS Budgets console
+
+  RumAppMonitorId:
+    Value: !GetAtt RumAppMonitor.Id
+    Description: CloudWatch RUM App Monitor ID — injected into index.html by deploy script
+
+  RumIdentityPoolId:
+    Value: !Ref RumIdentityPool
+    Description: Cognito Identity Pool ID for RUM unauthenticated telemetry
+
+  RumGuestRoleArn:
+    Value: !GetAtt RumGuestRole.Arn
+    Description: IAM role ARN for RUM guest (unauthenticated) telemetry sender
+
+  CanaryArtifactBucket:
+    Value: !Ref CanaryArtifactBucket
+    Description: S3 bucket holding canary screenshots and HAR files

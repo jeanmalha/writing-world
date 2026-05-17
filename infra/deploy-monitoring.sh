@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# deploy-monitoring.sh — Deploy the monitoring + budget stack
+# deploy-monitoring.sh — Deploy budget alerts, CloudWatch alarms, RUM, and Synthetics canaries.
 # Usage: ./infra/deploy-monitoring.sh your@email.com [budget_usd]
 
 set -euo pipefail
 
-# ── Load personal config ──────────────────────────────
-ENV_FILE="$(dirname "$0")/deploy.env"
+SCRIPT_DIR="$(dirname "$0")"
+APP_DIR="$SCRIPT_DIR/.."
+
+ENV_FILE="$SCRIPT_DIR/deploy.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Error: $ENV_FILE not found. Copy deploy.env.example and fill in your values."
   exit 1
@@ -14,9 +16,31 @@ source "$ENV_FILE"
 
 PROFILE="${AWS_PROFILE:?AWS_PROFILE not set in deploy.env}"
 DIST_ID="${DIST_ID:?DIST_ID not set in deploy.env}"
+DOMAIN="${DOMAIN:?DOMAIN not set in deploy.env}"
 
 REGION="us-east-1"
-STACK_NAME="writing-world-monitoring"
+BACKEND_STACK="writing-world-backend"
+MON_STACK="writing-world-monitoring"
+
+GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+info()    { echo -e "${CYAN}▶ $*${NC}"; }
+success() { echo -e "${GREEN}✓ $*${NC}"; }
+
+get_backend_output() {
+  aws cloudformation describe-stacks \
+    --profile "$PROFILE" --region "$REGION" \
+    --stack-name "$BACKEND_STACK" \
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+    --output text
+}
+
+get_mon_output() {
+  aws cloudformation describe-stacks \
+    --profile "$PROFILE" --region "$REGION" \
+    --stack-name "$MON_STACK" \
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+    --output text
+}
 
 EMAIL="${1:-}"
 BUDGET="${2:-10}"
@@ -26,20 +50,91 @@ if [[ -z "$EMAIL" ]]; then
   exit 1
 fi
 
-echo "▶ Deploying monitoring stack…"
+# ── Fetch API endpoint from backend stack ──────────────────────────────────────
+info "Fetching API endpoint from backend stack…"
+API_ENDPOINT="$(get_backend_output ApiEndpoint)"
+if [[ -z "$API_ENDPOINT" ]]; then
+  echo "Error: ApiEndpoint not found in backend stack. Deploy the backend first."
+  exit 1
+fi
+echo "  API: $API_ENDPOINT"
+
+# ── Deploy monitoring stack ────────────────────────────────────────────────────
+info "Deploying monitoring stack…"
 aws cloudformation deploy \
   --profile "$PROFILE" \
   --region  "$REGION" \
-  --stack-name "$STACK_NAME" \
-  --template-file "$(dirname "$0")/monitoring.yaml" \
+  --stack-name "$MON_STACK" \
+  --template-file "$SCRIPT_DIR/monitoring.yaml" \
+  --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
   --parameter-overrides \
     AlertEmail="$EMAIL" \
     MonthlyBudgetUSD="$BUDGET" \
-    DistributionId="$DIST_ID"
+    DistributionId="$DIST_ID" \
+    Domain="$DOMAIN" \
+    ApiEndpoint="$API_ENDPOINT"
 
-echo "✓ Monitoring deployed."
+success "Monitoring stack deployed."
+
+# ── Fetch RUM outputs ──────────────────────────────────────────────────────────
+info "Fetching RUM configuration from stack outputs…"
+RUM_MONITOR_ID="$(get_mon_output RumAppMonitorId)"
+RUM_POOL_ID="$(get_mon_output RumIdentityPoolId)"
+RUM_ROLE_ARN="$(get_mon_output RumGuestRoleArn)"
+ACCOUNT_ID="$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)"
+
+echo "  AppMonitor ID:  $RUM_MONITOR_ID"
+echo "  Identity Pool:  $RUM_POOL_ID"
+echo "  Guest Role:     $RUM_ROLE_ARN"
+
+# ── Inject RUM init snippet into index.html ────────────────────────────────────
+info "Injecting RUM init snippet into index.html…"
+
+python3 - "$APP_DIR/index.html" \
+  "$RUM_MONITOR_ID" "$RUM_POOL_ID" "$RUM_ROLE_ARN" "$REGION" "$DOMAIN" \
+  "$ACCOUNT_ID" << 'PYEOF'
+import re, sys
+path, monitor_id, pool_id, role_arn, region, domain, account_id = sys.argv[1:]
+
+snippet = f'''<script>
+  !function(n,i,v,r,s,c,u,x,z){{x=window;z=document;u=z.createElement('script');
+  u.async=true;u.src=r;u.crossOrigin='anonymous';
+  z.head.insertBefore(u,z.head.firstElementChild);
+  x[n]=x[n]||{{q:[]}};x[n].q.push(i);
+  x[n][v]=function(){{x[n].q.push([v].concat(Array.prototype.slice.call(arguments,0)))}}}}(
+    'cwr', '{monitor_id}', 'recordEvent',
+    'https://client.rum.us-east-1.amazonaws.com/1.x.x/cwr.js',
+    {{sessionSampleRate:1,
+     guestRoleArn:"{role_arn}",
+     identityPoolId:"{pool_id}",
+     endpoint:"https://dataplane.rum.{region}.amazonaws.com",
+     telemetries:["errors","http","performance"],
+     allowCookies:true,enableXRay:false}}
+  );
+</script>'''
+
+html = open(path).read()
+html = re.sub(
+    r'<!-- RUM-INIT-START -->.*?<!-- RUM-INIT-END -->',
+    f'<!-- RUM-INIT-START -->{snippet}<!-- RUM-INIT-END -->',
+    html, flags=re.DOTALL
+)
+open(path, 'w').write(html)
+print('  index.html updated.')
+PYEOF
+
+success "RUM snippet injected."
+
+# ── Re-sync frontend so the RUM snippet goes live ─────────────────────────────
+info "Re-syncing frontend with RUM snippet…"
+"$SCRIPT_DIR/deploy.sh" sync
+
 echo ""
-echo "  You will receive a confirmation email to $EMAIL — click the link to activate alerts."
-echo "  View budget: https://console.aws.amazon.com/billing/home#/budgets"
-echo "  View alarms: https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#alarmsV2:"
+success "Monitoring deployment complete!"
+echo ""
+echo "  RUM dashboard:   https://console.aws.amazon.com/cloudwatch/home?region=${REGION}#rum:monitor/${RUM_MONITOR_ID}"
+echo "  Synthetics:      https://console.aws.amazon.com/cloudwatch/home?region=${REGION}#synthetics:canary/list"
+echo "  Canary artifacts saved to S3 (screenshots + HAR files, auto-deleted after 30 days)"
+echo ""
+echo "  You will receive a confirmation email to $EMAIL — click the link to activate SNS alerts."
