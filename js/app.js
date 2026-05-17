@@ -719,21 +719,23 @@ async function initCloudSync() {
       if (!store.totalCount()) {
         // Nothing local — take cloud silently
         store.loadData(cloud.data);
+        store.mergeContent(cloud.content || {});
         renderAll();
       } else if (cloudAt > localAt) {
         // Cloud is newer — load it
         store.loadData(cloud.data);
+        store.mergeContent(cloud.content || {});
         renderAll();
         showBanner('Loaded your world from cloud.', 4000);
       } else if (localAt > cloudAt) {
         // Local is newer — push it up silently
-        await saveWorld(store.exportData());
+        await saveWorld(store.exportDataWithoutContent(), store.extractContent());
         _cloudStatus = 'synced'; updateStatus();
       }
       // If equal, do nothing
     } else if (store.totalCount()) {
       // No cloud save yet — push local up
-      await saveWorld(store.exportData());
+      await saveWorld(store.exportDataWithoutContent(), store.extractContent());
       _cloudStatus = 'synced'; updateStatus();
     }
   } catch (err) {
@@ -746,7 +748,7 @@ async function initCloudSync() {
     clearTimeout(_cloudSaveTimer);
     _cloudSaveTimer = setTimeout(async () => {
       try {
-        await saveWorld(store.exportData());
+        await saveWorld(store.exportDataWithoutContent(), store.extractContent());
         _cloudStatus = 'synced';
       } catch {
         _cloudStatus = 'error';

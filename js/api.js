@@ -86,10 +86,10 @@ export async function loadWorld() {
   return resp.json();   // { data, updatedAt } or null
 }
 
-export async function saveWorld(data) {
+export async function saveWorld(data, content = {}) {
   const resp = await apiFetch('/world', {
     method: 'PUT',
-    body:   JSON.stringify({ data }),
+    body:   JSON.stringify({ data, content }),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();   // { updatedAt }

@@ -648,6 +648,52 @@ export const store = {
 
   exportData() { return JSON.parse(JSON.stringify(_data)); },
 
+  // Returns a deep clone with content stripped from all structure items.
+  // Used for cloud sync so prose text never touches DynamoDB.
+  exportDataWithoutContent() {
+    const data = JSON.parse(JSON.stringify(_data));
+    for (const proj of Object.values(data.projects || {})) {
+      for (const act of (proj.structure || [])) {
+        delete act.content;
+        for (const ch of (act.chapters || [])) {
+          delete ch.content;
+          for (const sc of (ch.scenes || [])) { delete sc.content; }
+        }
+      }
+    }
+    return data;
+  },
+
+  // Returns flat map { itemId → contentText } across the active project.
+  extractContent() {
+    const map = {};
+    for (const act of (_proj().structure || [])) {
+      if (act.content)  map[act.id] = act.content;
+      for (const ch of (act.chapters || [])) {
+        if (ch.content) map[ch.id] = ch.content;
+        for (const sc of (ch.scenes || [])) {
+          if (sc.content) map[sc.id] = sc.content;
+        }
+      }
+    }
+    return map;
+  },
+
+  // Merges a flat { itemId → contentText } map back into the active project structure.
+  mergeContent(map) {
+    if (!map || !Object.keys(map).length) return;
+    for (const act of (_proj().structure || [])) {
+      if (map[act.id] !== undefined) act.content = map[act.id];
+      for (const ch of (act.chapters || [])) {
+        if (map[ch.id] !== undefined) ch.content = map[ch.id];
+        for (const sc of (ch.scenes || [])) {
+          if (map[sc.id] !== undefined) sc.content = map[sc.id];
+        }
+      }
+    }
+    persist(_data);
+  },
+
   loadData(data) {
     if (!data.version) throw new Error('Unrecognised format');
     _data = data.version === 2 ? data : _migrateV1(data);

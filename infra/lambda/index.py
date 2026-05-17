@@ -855,6 +855,11 @@ def _user_id(event):
     except (KeyError, TypeError):
         return None
 
+CONTENT_CHUNK_BYTES = 256 * 1024  # 256 KB per S3 chunk
+
+def _content_s3_prefix(uid):
+    return f'world-content/{uid}'
+
 def get_world(event):
     uid = _user_id(event)
     if not uid:
@@ -862,7 +867,26 @@ def get_world(event):
     item = ddb.Table(WORLD_TABLE).get_item(Key={'userId': uid}).get('Item')
     if not item:
         return out(404, {'error': 'no world found'})
-    return out(200, {'data': json.loads(item['data']), 'updatedAt': item['updatedAt']})
+
+    # Reassemble content from S3 chunks
+    content = {}
+    chunk_keys = item.get('contentChunks') or []
+    if chunk_keys and PDF_BUCKET:
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            def _fetch(key):
+                return s3.get_object(Bucket=PDF_BUCKET, Key=key)['Body'].read()
+            with ThreadPoolExecutor(max_workers=min(len(chunk_keys), 8)) as pool:
+                futures = {pool.submit(_fetch, k): i for i, k in enumerate(chunk_keys)}
+                parts   = [None] * len(chunk_keys)
+                for fut in as_completed(futures):
+                    parts[futures[fut]] = fut.result()
+            content = json.loads(b''.join(parts).decode('utf-8'))
+        except Exception as e:
+            print(f'Content fetch failed: {e}')
+
+    return out(200, {'data': json.loads(item['data']), 'content': content,
+                     'updatedAt': item['updatedAt']})
 
 def put_world(event):
     uid = _user_id(event)
@@ -875,11 +899,33 @@ def put_world(event):
     world_data = body.get('data')
     if not world_data:
         return out(400, {'error': 'data is required'})
+    content = body.get('content') or {}
+
     now = datetime.now(timezone.utc).isoformat()
-    ddb.Table(WORLD_TABLE).put_item(Item={
-        'userId': uid, 'data': json.dumps(world_data), 'updatedAt': now,
-    })
-    return out(200, {'updatedAt': now})
+
+    # Write content to S3 in 256KB chunks
+    chunk_keys = []
+    if content and PDF_BUCKET:
+        content_bytes = json.dumps(content, ensure_ascii=False).encode('utf-8')
+        raw_chunks = [content_bytes[i:i+CONTENT_CHUNK_BYTES]
+                      for i in range(0, max(len(content_bytes), 1), CONTENT_CHUNK_BYTES)]
+        prefix = _content_s3_prefix(uid)
+        for i, chunk in enumerate(raw_chunks):
+            key = f'{prefix}-{i}.json'
+            s3.put_object(Bucket=PDF_BUCKET, Key=key, Body=chunk,
+                          ContentType='application/json')
+            chunk_keys.append(key)
+        # Delete any old chunks beyond the new count
+        old_count = int(body.get('_prevChunkCount', len(raw_chunks) + 10))
+        for i in range(len(raw_chunks), old_count + 1):
+            try: s3.delete_object(Bucket=PDF_BUCKET, Key=f'{prefix}-{i}.json')
+            except Exception: pass
+
+    item = {'userId': uid, 'data': json.dumps(world_data), 'updatedAt': now}
+    if chunk_keys:
+        item['contentChunks'] = chunk_keys
+    ddb.Table(WORLD_TABLE).put_item(Item=item)
+    return out(200, {'updatedAt': now, 'contentChunks': len(chunk_keys)})
 
 
 # ── Async processor ───────────────────────────────────────────────────────────
