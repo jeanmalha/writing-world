@@ -297,7 +297,8 @@ def start_job(event, job_type):
         if existing_structure:
             item['existing'] = json.dumps(existing_structure)
 
-    else:  # analyze
+    else:  # analyze — always use complex; simple models hallucinate invalid tool names
+        item['modelMode'] = 'complex'
         existing = body.get('entities', [])
         if not existing:
             return out(400, {'error': 'entities is required'})
@@ -1375,4 +1376,6 @@ def _dedupe(items: list) -> list:
     return result
 
 def out(code: int, data: dict) -> dict:
-    return {'statusCode': code, 'body': json.dumps(data)}
+    return {'statusCode':  code,
+            'headers':     {'Content-Type': 'application/json'},
+            'body':        json.dumps(data)}
