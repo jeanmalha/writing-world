@@ -361,7 +361,11 @@ async function runParallelExtract(entityStartFn, structStartFn, listHeader, enti
         pollJob(entityEndpoint, entityJob.jobId),
         pollJob('extract-structure', structJob.jobId),
       ]);
-      if (ep.status === 'error')  { _status = ep.error || 'Extraction failed'; break; }
+      if (ep.status === 'error') {
+        if (ep.result?.partial) _results = ep.result;
+        _status = (ep.result?.partial ? '⚠ Interrupted — partial results below. ' : '') + (ep.error || 'Extraction failed');
+        break;
+      }
       if (sp.status === 'error')  { _status = sp.error || 'Structure extraction failed'; break; }
       if (ep.status === 'done' && sp.status === 'done') {
         _results = { ...ep.result, structure: sp.result };
@@ -418,7 +422,12 @@ async function runJob(startFn, endpoint, listHeader, entityList, detailContent) 
       await sleep(3000);
       const job = await pollJob(endpoint, jobId);
       if (job.status === 'done')  { _results = job.result; _status = ''; break; }
-      if (job.status === 'error') { _status = job.error || 'Failed'; break; }
+      if (job.status === 'error') {
+        // Show partial results if the agent extracted something before failing
+        if (job.result?.partial) { _results = job.result; }
+        _status = (job.result?.partial ? '⚠ Interrupted — partial results below. ' : '') + (job.error || 'Failed');
+        break;
+      }
       dots = (dots + 1) % 4;
       const verb = endpoint === 'analyze' ? 'Analyzing' : 'Extracting';
       _status = verb + '.'.repeat(dots + 1);
@@ -552,7 +561,7 @@ function renderExtractResults(detailContent) {
     store.getAll().forEach(e => { if (e.name) nameToId[e.name.toLowerCase()] = e.id; });
 
     let applied = 0;
-    container.querySelectorAll('.ai-cb-create:checked').forEach(cb => {
+    detailContent.querySelectorAll('.ai-cb-create:checked').forEach(cb => {
       const item = creates[parseInt(cb.dataset.index)];
       if (item) {
         const entity = importCreate(item);
@@ -560,11 +569,11 @@ function renderExtractResults(detailContent) {
         applied++;
       }
     });
-    container.querySelectorAll('.ai-cb-update:checked').forEach(cb => {
+    detailContent.querySelectorAll('.ai-cb-update:checked').forEach(cb => {
       const upd = updates[parseInt(cb.dataset.index)];
       if (upd && store.get(upd.id)) { store.update(upd.id, upd.changes); applied++; }
     });
-    container.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
+    detailContent.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
       const l   = links[parseInt(cb.dataset.index)];
       if (!l)   return;
       const src = nameToId[l.sourceName?.toLowerCase()];
@@ -778,14 +787,14 @@ function renderAnalyzeResults(detailContent) {
 
   document.getElementById('btn-apply-suggestions')?.addEventListener('click', () => {
     let applied = 0;
-    container.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
+    detailContent.querySelectorAll('.ai-cb-link:checked').forEach(cb => {
       const l = links[parseInt(cb.dataset.index)];
       if (l && store.get(l.sourceId) && store.get(l.targetId)) {
         store.addLink(l.sourceId, l.targetId, l.label);
         applied++;
       }
     });
-    container.querySelectorAll('.ai-cb-merge:checked').forEach(cb => {
+    detailContent.querySelectorAll('.ai-cb-merge:checked').forEach(cb => {
       const m = merges[parseInt(cb.dataset.index)];
       if (!m) return;
       const keep    = store.get(m.keepId);

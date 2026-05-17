@@ -1,5 +1,5 @@
 import { isAdmin } from './auth.js';
-import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest, getAdminVisits, getFeatures, updateAdminFeature } from './api.js';
+import { getAdminUsers, createAdminUser, deleteAdminUser, setAdminUserTier, setAdminUserAdmin, getAdminStatus, getAdminUsage, getAdminTiers, updateAdminTier, getAdminInterest, getAdminVisits, getAdminModels, updateAdminModels, getFeatures, updateAdminFeature } from './api.js';
 
 let _tab = 'users';
 
@@ -229,21 +229,31 @@ function _renderUserDetail(detailContent, user, entityList, users) {
 
 // ── Tiers tab ──────────────────────────────────────────────────────────────
 
-const TIER_COLORS = { explorer: '#60a5fa', trailblazer: '#a78bfa', uncharted: '#f59e0b' };
+const TIER_COLORS    = { explorer: '#60a5fa', trailblazer: '#a78bfa', uncharted: '#f59e0b' };
+const TIER_CEILINGS  = { explorer: 0, trailblazer: 1, uncharted: 2 };
+const MODEL_RANK     = { simple: 0, medium: 1, complex: 2 };
 
 async function _renderTiers(entityList, detailContent) {
-  const { tiers } = await getAdminTiers();
-  detailContent.innerHTML = '';
+  const [{ tiers }, models] = await Promise.all([getAdminTiers(), getAdminModels()]);
 
-  entityList.innerHTML = tiers.map(t => `
+  entityList.innerHTML = tiers.map(t => {
+    const ceiling = TIER_CEILINGS[t.tierId] ?? 2;
+    const modelBtn = (key, label) => {
+      const rank     = MODEL_RANK[key] ?? 0;
+      const active   = t.model === key ? ' active' : '';
+      const disabled = rank > ceiling ? ' disabled' : '';
+      return `<button class="admin-model-btn${active}${disabled}" data-tier="${t.tierId}" data-model="${key}"${disabled ? ' disabled title="Above this tier\'s ceiling"' : ''}>${label}</button>`;
+    };
+    return `
     <div class="admin-tier-card" data-tier="${t.tierId}">
-      <div class="admin-tier-header">
-        <span class="admin-tier-name" style="color:${TIER_COLORS[t.tierId] || 'var(--accent)'}">${_esc(t.label)}</span>
-        <div class="admin-tier-model-toggle">
-          <button class="admin-model-btn${t.model === 'simple'  ? ' active' : ''}" data-tier="${t.tierId}" data-model="simple">Simple</button>
-          <button class="admin-model-btn${t.model === 'medium'  ? ' active' : ''}" data-tier="${t.tierId}" data-model="medium">Medium</button>
-          <button class="admin-model-btn${t.model === 'complex' ? ' active' : ''}" data-tier="${t.tierId}" data-model="complex">Complex</button>
-        </div>
+      <div class="admin-tier-name-row">
+        <input class="admin-tier-name-inp" data-tier="${t.tierId}"
+               value="${_esc(t.label)}" style="color:${TIER_COLORS[t.tierId] || 'var(--accent)'}">
+      </div>
+      <div class="admin-tier-model-toggle">
+        ${modelBtn('simple', 'Simple')}
+        ${modelBtn('medium', 'Medium')}
+        ${modelBtn('complex', 'Complex')}
       </div>
       <div class="admin-tier-limits">
         <div class="admin-limit-row">
@@ -269,10 +279,11 @@ async function _renderTiers(entityList, detailContent) {
         <span class="admin-tier-msg" id="tier-msg-${t.tierId}"></span>
         <button class="admin-tier-save" data-tier="${t.tierId}">Save</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
-  // Model toggle
-  entityList.querySelectorAll('.admin-model-btn').forEach(btn => {
+  // Model toggle (only non-disabled buttons)
+  entityList.querySelectorAll('.admin-model-btn:not([disabled])').forEach(btn => {
     btn.addEventListener('click', () => {
       const card = entityList.querySelector(`.admin-tier-card[data-tier="${btn.dataset.tier}"]`);
       card.querySelectorAll('.admin-model-btn').forEach(b => b.classList.remove('active'));
@@ -280,30 +291,63 @@ async function _renderTiers(entityList, detailContent) {
     });
   });
 
-  // Save
+  // Save tier
   entityList.querySelectorAll('.admin-tier-save').forEach(btn => {
     btn.addEventListener('click', async () => {
       const tierId = btn.dataset.tier;
       const card   = entityList.querySelector(`.admin-tier-card[data-tier="${tierId}"]`);
       const msg    = document.getElementById(`tier-msg-${tierId}`);
       const model  = card.querySelector('.admin-model-btn.active')?.dataset.model || 'simple';
+      const label  = card.querySelector('.admin-tier-name-inp')?.value.trim() || tierId;
       const limits = {};
       card.querySelectorAll('.admin-limit-input').forEach(inp => {
         limits[inp.dataset.field] = parseInt(inp.value) || 0;
       });
-
-      btn.disabled = true;
-      msg.textContent = '';
+      btn.disabled = true; msg.textContent = '';
       try {
-        await updateAdminTier(tierId, { model, ...limits });
-        msg.textContent = '✓ Saved';
-        msg.className   = 'admin-tier-msg admin-msg-ok';
+        await updateAdminTier(tierId, { model, label, ...limits });
+        msg.textContent = '✓ Saved'; msg.className = 'admin-tier-msg admin-msg-ok';
       } catch (err) {
-        msg.textContent = `✗ ${err.message}`;
-        msg.className   = 'admin-tier-msg admin-msg-err';
+        msg.textContent = `✗ ${err.message}`; msg.className = 'admin-tier-msg admin-msg-err';
       }
       btn.disabled = false;
     });
+  });
+
+  // Model configuration panel in detail pane
+  detailContent.innerHTML = `
+    <div class="admin-models-panel">
+      <div class="admin-models-title">MODEL CONFIGURATION</div>
+      <div class="admin-models-desc">Which Bedrock model ID is used for each complexity level.</div>
+      ${['simple', 'medium', 'complex'].map(k => `
+        <div class="admin-models-row">
+          <label class="admin-models-label">${k.charAt(0).toUpperCase() + k.slice(1)}</label>
+          <input class="admin-models-input" id="model-inp-${k}" type="text"
+                 value="${_esc(models[k] || '')}" autocomplete="off" spellcheck="false">
+        </div>`).join('')}
+      <div class="admin-models-footer">
+        <span class="admin-tier-msg" id="models-msg"></span>
+        <button id="btn-save-models">Save</button>
+      </div>
+    </div>`;
+
+  document.getElementById('btn-save-models')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-save-models');
+    const msg = document.getElementById('models-msg');
+    btn.disabled = true; msg.textContent = '';
+    try {
+      await updateAdminModels({
+        simple:  document.getElementById('model-inp-simple')?.value.trim(),
+        medium:  document.getElementById('model-inp-medium')?.value.trim(),
+        complex: document.getElementById('model-inp-complex')?.value.trim(),
+      });
+      msg.textContent = '✓ Saved (takes effect within 5 min)';
+      msg.className   = 'admin-tier-msg admin-msg-ok';
+    } catch (err) {
+      msg.textContent = `✗ ${err.message}`;
+      msg.className   = 'admin-tier-msg admin-msg-err';
+    }
+    btn.disabled = false;
   });
 }
 

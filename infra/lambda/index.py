@@ -26,10 +26,31 @@ COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-
 CHUNK_WORDS     = 2000
 PDF_CHUNK_PAGES = 5
 
+_model_cfg_cache    = None
+_model_cfg_cache_ts = 0
+
+def _get_model_config():
+    global _model_cfg_cache, _model_cfg_cache_ts
+    now = datetime.now(timezone.utc).timestamp()
+    if _model_cfg_cache and now < _model_cfg_cache_ts:
+        return _model_cfg_cache
+    try:
+        item = ddb.Table(FEATURES_TABLE).get_item(Key={'flagId': 'models'}).get('Item', {})
+        _model_cfg_cache = {
+            'simple':  item.get('simple',  SIMPLE_MODEL),
+            'medium':  item.get('medium',  MEDIUM_MODEL),
+            'complex': item.get('complex', COMPLEX_MODEL),
+        }
+    except Exception:
+        _model_cfg_cache = {'simple': SIMPLE_MODEL, 'medium': MEDIUM_MODEL, 'complex': COMPLEX_MODEL}
+    _model_cfg_cache_ts = now + 300  # 5-minute TTL
+    return _model_cfg_cache
+
 def resolve_model(mode):
-    if mode == 'complex': return COMPLEX_MODEL
-    if mode == 'medium':  return MEDIUM_MODEL
-    return SIMPLE_MODEL
+    cfg = _get_model_config()
+    if mode == 'complex': return cfg.get('complex', COMPLEX_MODEL)
+    if mode == 'medium':  return cfg.get('medium',  MEDIUM_MODEL)
+    return cfg.get('simple', SIMPLE_MODEL)
 
 
 # ── Tier system ───────────────────────────────────────────────────────────────
@@ -229,6 +250,10 @@ def handler(event, context):
         return admin_update_tier(event, path.split('/')[-1])
     if method == 'GET'  and path.endswith('/admin/interest'):
         return admin_interest(event)
+    if method == 'GET'  and path.endswith('/admin/models'):
+        return get_admin_models(event)
+    if method == 'PUT'  and path.endswith('/admin/models'):
+        return update_admin_models(event)
     return out(404, {'error': 'not found'})
 
 
@@ -677,6 +702,10 @@ def admin_visits(event):
 
 # ── Admin — tiers ─────────────────────────────────────────────────────────────
 
+# Maximum model allowed per tier (ceiling, cannot be overridden by admin)
+TIER_CEILINGS = {'explorer': 'simple', 'trailblazer': 'medium', 'uncharted': 'complex'}
+MODEL_RANK     = {'simple': 0, 'medium': 1, 'complex': 2}
+
 def admin_get_tiers(event):
     if not _is_admin(event):
         return out(403, {'error': 'forbidden'})
@@ -684,10 +713,17 @@ def admin_get_tiers(event):
     tiers = []
     for tier_id in ('explorer', 'trailblazer', 'uncharted'):
         cfg = _get_tier_config(tier_id)
+        # label may be customised and stored in DynamoDB
+        try:
+            stored = ddb.Table(TIERS_TABLE).get_item(Key={'tierId': tier_id}).get('Item', {})
+            label  = stored.get('label', TIER_LABELS[tier_id])
+        except Exception:
+            label = TIER_LABELS[tier_id]
         tiers.append({
-            'tierId':       tier_id,
-            'label':        TIER_LABELS[tier_id],
-            'model':        cfg['model'],
+            'tierId':    tier_id,
+            'label':     label,
+            'ceiling':   TIER_CEILINGS[tier_id],
+            'model':     cfg['model'],
             'dailyLimit':   cfg['dailyLimit'],
             'weeklyLimit':  cfg['weeklyLimit'],
             'monthlyLimit': cfg['monthlyLimit'],
@@ -709,22 +745,49 @@ def admin_update_tier(event, tier_id):
         return out(400, {'error': 'invalid JSON'})
 
     defaults = TIER_DEFAULTS[tier_id]
-    model    = body.get('model',        defaults['model'])
+    model    = body.get('model', defaults['model'])
+    label    = str(body.get('label', TIER_LABELS[tier_id])).strip() or TIER_LABELS[tier_id]
     daily    = int(body.get('dailyLimit',   defaults['dailyLimit']))
     weekly   = int(body.get('weeklyLimit',  defaults['weeklyLimit']))
     monthly  = int(body.get('monthlyLimit', defaults['monthlyLimit']))
 
-    if model not in ('simple', 'medium', 'complex'):
+    if model not in MODEL_RANK:
         return out(400, {'error': 'model must be simple, medium, or complex'})
+    if MODEL_RANK[model] > MODEL_RANK[TIER_CEILINGS[tier_id]]:
+        return out(400, {'error': f'{tier_id} ceiling is {TIER_CEILINGS[tier_id]}'})
 
     ddb.Table(TIERS_TABLE).put_item(Item={
-        'tierId':       tier_id,
-        'model':        model,
-        'dailyLimit':   daily,
-        'weeklyLimit':  weekly,
-        'monthlyLimit': monthly,
+        'tierId': tier_id, 'label': label, 'model': model,
+        'dailyLimit': daily, 'weeklyLimit': weekly, 'monthlyLimit': monthly,
     })
     return out(200, {'ok': True})
+
+
+def get_admin_models(event):
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    cfg = _get_model_config()
+    return out(200, cfg)
+
+
+def update_admin_models(event):
+    global _model_cfg_cache, _model_cfg_cache_ts
+    if not _is_admin(event):
+        return out(403, {'error': 'forbidden'})
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        return out(400, {'error': 'invalid JSON'})
+
+    cfg = {
+        'simple':  str(body.get('simple',  SIMPLE_MODEL)).strip() or SIMPLE_MODEL,
+        'medium':  str(body.get('medium',  MEDIUM_MODEL)).strip() or MEDIUM_MODEL,
+        'complex': str(body.get('complex', COMPLEX_MODEL)).strip() or COMPLEX_MODEL,
+    }
+    ddb.Table(FEATURES_TABLE).put_item(Item={'flagId': 'models', **cfg})
+    _model_cfg_cache    = None   # invalidate cache
+    _model_cfg_cache_ts = 0
+    return out(200, cfg)
 
 
 # ── Feature flags ─────────────────────────────────────────────────────────────
@@ -974,12 +1037,23 @@ def process(event, context):
         _record_usage(user_id, usage['input'], usage['output'])
 
     except Exception as e:
-        table.update_item(
-            Key={'jobId': job_id},
-            UpdateExpression='SET #s = :s, #e = :e',
-            ExpressionAttributeNames={'#s': 'status', '#e': 'error'},
-            ExpressionAttributeValues={':s': 'error', ':e': str(e)},
-        )
+        # Save whatever partial result the agent accumulated before failing
+        partial = getattr(e, '_partial', None)
+        if partial:
+            table.update_item(
+                Key={'jobId': job_id},
+                UpdateExpression='SET #s = :s, #e = :e, #r = :r',
+                ExpressionAttributeNames={'#s': 'status', '#e': 'error', '#r': 'result'},
+                ExpressionAttributeValues={':s': 'error', ':e': str(e),
+                                           ':r': json.dumps({**partial, 'partial': True})},
+            )
+        else:
+            table.update_item(
+                Key={'jobId': job_id},
+                UpdateExpression='SET #s = :s, #e = :e',
+                ExpressionAttributeNames={'#s': 'status', '#e': 'error'},
+                ExpressionAttributeValues={':s': 'error', ':e': str(e)},
+            )
 
 
 # ── PDF orchestrator agent ────────────────────────────────────────────────────
@@ -1030,8 +1104,12 @@ def run_extract_pdf_agent(pages: list, existing: list, model_id: str, usage: dic
             "then call finalize() exactly once."
         ),
     )
-    r = agent(f"{existing_ctx}Novel split into {len(chunks)} chunk(s):\n{chunk_list}\n\nProcess all chunks in order, then finalize.")
-    _add_usage(r, usage)
+    try:
+        r = agent(f"{existing_ctx}Novel split into {len(chunks)} chunk(s):\n{chunk_list}\n\nProcess all chunks in order, then finalize.")
+        _add_usage(r, usage)
+    except Exception as e:
+        e._partial = {'creates': _dedupe(state['creates']), 'updates': state['updates'], 'links': state['links']}
+        raise
 
     return {'creates': _dedupe(state['creates']), 'updates': state['updates'], 'links': state['links']}
 
@@ -1115,9 +1193,13 @@ def run_extract_agent(text: str, existing: list, model_id: str, usage: dict = No
     )
 
     total = len(state['queue'])
-    r = agent(f"{_existing_ctx(existing)}Process the {total} text chunk(s). "
-              "Call get_next_chunk, then create_entity or update_entity for each entity found.")
-    _add_usage(r, usage)
+    try:
+        r = agent(f"{_existing_ctx(existing)}Process the {total} text chunk(s). "
+                  "Call get_next_chunk, then create_entity or update_entity for each entity found.")
+        _add_usage(r, usage)
+    except Exception as e:
+        e._partial = {'creates': _dedupe(state['creates']), 'updates': state['updates'], 'links': state['links']}
+        raise
 
     return {'creates': _dedupe(state['creates']), 'updates': state['updates'], 'links': state['links']}
 
@@ -1178,8 +1260,12 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
         ),
     )
 
-    r = agent("Here are all entities:\n\n" + "\n".join(lines) + "\n\nSuggest missing links and potential merges.")
-    _add_usage(r, usage)
+    try:
+        r = agent("Here are all entities:\n\n" + "\n".join(lines) + "\n\nSuggest missing links and potential merges.")
+        _add_usage(r, usage)
+    except Exception as e:
+        e._partial = {'links': state['links'], 'merges': state['merges']}
+        raise
 
     return {'links': state['links'], 'merges': state['merges']}
 

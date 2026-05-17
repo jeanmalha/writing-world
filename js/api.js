@@ -172,6 +172,21 @@ export async function getAdminInterest() {
   return resp.json();
 }
 
+export async function getAdminModels() {
+  const resp = await apiFetch('/admin/models');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function updateAdminModels(config) {
+  const resp = await apiFetch('/admin/models', {
+    method: 'PUT',
+    body:   JSON.stringify(config),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function getAdminVisits() {
   const resp = await apiFetch('/admin/visits');
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
