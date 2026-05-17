@@ -10,6 +10,7 @@ import { renderGraphView }     from './graph.js';
 import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
 import { initTheme, getTheme, setTheme } from './theme.js';
+import { initLayout, isMobileLayout } from './layout.js';
 import { getFeatures, postTelemetry } from './api.js';
 import { setAssistantModel } from './llm.js';
 
@@ -21,6 +22,8 @@ const state = {
   editing:    false,
   query:      '',
 };
+
+let _mob = 'home'; // mobile nav state: 'home' | 'list' | 'detail' | 'fullscreen'
 
 // ── DOM refs ───────────────────────────────────────────
 const $       = id => document.getElementById(id);
@@ -525,12 +528,18 @@ function selectType(type) {
   state.editing = false;
   searchInput.value = '';
   state.query = '';
+  if (isMobileLayout()) _mob = 'list';
   renderAll();
 }
 
 function selectEntity(id) {
   state.selectedId = id;
   state.editing = false;
+  if (isMobileLayout()) {
+    _mob = 'detail';
+    renderAll();
+    return;
+  }
   // Highlight in list
   document.querySelectorAll('.entity-item, .timeline-item').forEach(el =>
     el.classList.toggle('selected', el.dataset.id === id));
@@ -546,6 +555,7 @@ function jumpTo(id) {
   state.editing = false;
   searchInput.value = '';
   state.query = '';
+  if (isMobileLayout()) _mob = 'detail';
   renderAll();
 }
 
@@ -553,6 +563,7 @@ function showTimeline() {
   state.view = 'timeline';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -560,6 +571,7 @@ function showAiPanel() {
   state.view = 'ai';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -567,6 +579,7 @@ function showBoard() {
   state.view = 'board';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -574,6 +587,7 @@ function showGraph() {
   state.view = 'graph';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -581,6 +595,7 @@ function showStructure() {
   state.view = 'structure';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -588,6 +603,7 @@ function showProject() {
   state.view = 'project';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -595,6 +611,7 @@ function showSettings() {
   state.view = 'settings';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -602,6 +619,7 @@ function showAdmin() {
   state.view = 'admin';
   state.selectedId = null;
   state.editing = false;
+  if (isMobileLayout()) _mob = 'fullscreen';
   renderAll();
 }
 
@@ -609,6 +627,11 @@ function handleNew() {
   const entity = store.create(state.type);
   state.selectedId = entity.id;
   state.editing = true;
+  if (isMobileLayout()) {
+    _mob = 'detail';
+    renderAll();
+    return;
+  }
   renderList();
   renderDetail();
 }
@@ -645,6 +668,136 @@ function handleDelete(id) {
   renderAll();
 }
 
+// ── Mobile home ─────────────────────────────────────────
+function renderMobileHome() {
+  const el = document.getElementById('mobile-home');
+  if (!el) return;
+  const counts  = store.countByType();
+  const config  = store.getConfig();
+  const enabled = new Set(config.enabledTypes || []);
+  const proj    = store.getProject();
+  const strCount = store.getStructure().length;
+
+  let html = `<div class="mob-tiles">`;
+
+  html += `<button class="mob-tile" id="mob-btn-project" style="grid-column:1/-1">
+    <span class="mob-tile-icon" style="color:var(--accent)">◈</span>
+    <span class="mob-tile-label">${esc(proj.title) || 'Project'}</span>
+  </button>`;
+
+  for (const [type, def] of Object.entries(TYPES)) {
+    if (!enabled.has(type)) continue;
+    html += `<button class="mob-tile" data-mob-type="${type}">
+      <span class="mob-tile-icon" style="color:${def.color}">${def.icon}</span>
+      <span class="mob-tile-count">${counts[type]}</span>
+      <span class="mob-tile-label">${def.label}</span>
+    </button>`;
+  }
+
+  html += `
+    <button class="mob-tile" id="mob-btn-timeline">
+      <span class="mob-tile-icon" style="color:#facc15">◫</span>
+      <span class="mob-tile-count">${counts.event || 0}</span>
+      <span class="mob-tile-label">Timeline</span>
+    </button>
+    <button class="mob-tile" id="mob-btn-board">
+      <span class="mob-tile-icon" style="color:#60a5fa">&#9635;</span>
+      <span class="mob-tile-count">${counts.character || 0}</span>
+      <span class="mob-tile-label">Board</span>
+    </button>
+    <button class="mob-tile" id="mob-btn-graph">
+      <span class="mob-tile-icon" style="color:#34d399">◎</span>
+      <span class="mob-tile-label">Graph</span>
+    </button>
+    <button class="mob-tile" id="mob-btn-structure">
+      <span class="mob-tile-icon" style="color:#c084fc">▤</span>
+      ${strCount ? `<span class="mob-tile-count">${strCount}</span>` : ''}
+      <span class="mob-tile-label">Structure</span>
+    </button>`;
+
+  if (isAuthEnabled) {
+    html += `<button class="mob-tile" id="mob-btn-ai">
+      <span class="mob-tile-icon" style="color:#a78bfa">◈</span>
+      <span class="mob-tile-label">AI Extract</span>
+    </button>`;
+  }
+
+  html += `<button class="mob-tile" id="mob-btn-settings">
+    <span class="mob-tile-icon" style="color:var(--text-muted)">⚙</span>
+    <span class="mob-tile-label">Settings</span>
+  </button>`;
+
+  if (isAdmin()) {
+    html += `<button class="mob-tile" id="mob-btn-admin">
+      <span class="mob-tile-icon" style="color:#f87171">⬡</span>
+      <span class="mob-tile-label">Admin</span>
+    </button>`;
+  }
+
+  html += `</div>`;
+  el.innerHTML = html;
+
+  el.querySelectorAll('[data-mob-type]').forEach(btn =>
+    btn.addEventListener('click', () => selectType(btn.dataset.mobType)));
+  document.getElementById('mob-btn-project')?.addEventListener('click', showProject);
+  document.getElementById('mob-btn-timeline')?.addEventListener('click', showTimeline);
+  document.getElementById('mob-btn-board')?.addEventListener('click', showBoard);
+  document.getElementById('mob-btn-graph')?.addEventListener('click', showGraph);
+  document.getElementById('mob-btn-structure')?.addEventListener('click', showStructure);
+  document.getElementById('mob-btn-ai')?.addEventListener('click', showAiPanel);
+  document.getElementById('mob-btn-settings')?.addEventListener('click', showSettings);
+  document.getElementById('mob-btn-admin')?.addEventListener('click', showAdmin);
+}
+
+function updateMobileNav() {
+  const backBtn = document.getElementById('mob-back');
+  const titleEl = document.getElementById('mob-title');
+  const authEl  = document.getElementById('mob-auth');
+  if (!backBtn || !titleEl) return;
+
+  backBtn.classList.toggle('hidden', _mob === 'home');
+
+  const viewLabels = {
+    timeline: 'Timeline', board: 'Board', graph: 'Graph',
+    structure: 'Structure', ai: 'AI Extract', settings: 'Settings',
+    admin: 'Admin', project: 'Projects',
+  };
+
+  if (_mob === 'home') {
+    titleEl.textContent = 'LORE';
+  } else if (_mob === 'list') {
+    titleEl.textContent = TYPES[state.type]?.label || 'Entries';
+  } else if (_mob === 'detail') {
+    const entity = state.selectedId ? store.get(state.selectedId) : null;
+    titleEl.textContent = entity?.name || TYPES[state.type]?.label || '';
+  } else {
+    titleEl.textContent = viewLabels[state.view] || '';
+  }
+
+  if (authEl && isAuthEnabled) {
+    if (isAuthenticated()) {
+      const email = getUserEmail() || '';
+      authEl.innerHTML = `<button id="mob-signout" title="${esc(email)}">Sign Out</button>`;
+      document.getElementById('mob-signout')?.addEventListener('click', logout);
+    } else {
+      authEl.innerHTML = `<button id="mob-signin">Sign In</button>`;
+      document.getElementById('mob-signin')?.addEventListener('click', login);
+    }
+  }
+}
+
+function mobBack() {
+  if (_mob === 'detail' && state.view === 'list') {
+    _mob = 'list';
+    state.editing = false;
+  } else {
+    _mob = 'home';
+    state.selectedId = null;
+    state.editing = false;
+  }
+  renderAll();
+}
+
 // ── Full re-render ──────────────────────────────────────
 function renderAll() {
   // If in list mode with a now-disabled type, fall back to first enabled
@@ -655,23 +808,35 @@ function renderAll() {
     }
   }
 
-  renderSidebar();
+  const isMob = isMobileLayout();
+
+  // Apply mob-state classes
+  ['mob-home', 'mob-list', 'mob-detail', 'mob-fullscreen'].forEach(c =>
+    document.body.classList.remove(c));
+  if (isMob) document.body.classList.add('mob-' + _mob);
+
+  if (!isMob) renderSidebar();
+
   const isBoardMode = state.view === 'board';
   const isGraphMode = state.view === 'graph';
   document.body.classList.toggle('board-mode', isBoardMode);
   document.body.classList.toggle('graph-mode', isGraphMode);
 
-  if (isBoardMode) {
+  if (isMob && _mob === 'home') {
+    renderMobileHome();
+  } else if (isBoardMode) {
     renderBoard();
   } else if (state.view === 'timeline')  { renderTimeline(); renderDetail(); }
   else if   (state.view === 'search')    { renderSearch();   renderDetail(); }
   else if   (state.view === 'ai')        { renderAiView(listHeader, entityList, detailContent); }
-  else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderSidebar, renderAll); }
-  else if   (state.view === 'settings')  { renderSettingsView(listHeader, entityList, detailContent, renderSidebar); }
+  else if   (state.view === 'project')   { renderProjectView(listHeader, entityList, detailContent, renderAll, renderAll); }
+  else if   (state.view === 'settings')  { renderSettingsView(listHeader, entityList, detailContent, renderAll); }
   else if   (state.view === 'admin')     { renderAdminView(listHeader, entityList, detailContent); }
   else if   (state.view === 'structure') { renderStructureView(listHeader, entityList, detailContent); }
   else if   (state.view === 'graph')     { renderGraphView(listHeader, entityList, detailContent); }
   else                                   { renderList();     renderDetail(); }
+
+  if (isMob) updateMobileNav();
   updateStatus();
   updateAuthStatus();
   updateChatBtn();
@@ -868,6 +1033,13 @@ $('save-name-input').addEventListener('keydown', e => {
 $('btn-about')?.addEventListener('click', showSplash);
 $('btn-chat-toggle')?.addEventListener('click', () => toggleChat(state.selectedId));
 
+// ── Layout ───────────────────────────────────────────────
+initLayout(() => {
+  if (!isMobileLayout()) _mob = 'home';
+  renderAll();
+});
+document.getElementById('mob-back')?.addEventListener('click', mobBack);
+
 // ── Theme toggle ─────────────────────────────────────────
 initTheme();
 
@@ -950,6 +1122,7 @@ async function init() {
     state.editing   = true;
     searchInput.value = '';
     state.query = '';
+    if (isMobileLayout()) _mob = 'detail';
     renderAll();
   });
   renderAll();

@@ -1,4 +1,5 @@
 import { store, TYPES } from './store.js';
+import { getLayoutPref, setLayoutPref } from './layout.js';
 
 const $ = id => document.getElementById(id);
 
@@ -31,13 +32,28 @@ export function renderSettingsView(listHeader, entityList, detailContent, onUpda
       onUpdate?.();
     }));
 
+  const layoutPref = getLayoutPref();
   detailContent.innerHTML = `<div style="padding:18px 24px">
     <div class="section-title" style="margin-bottom:12px">Visibility</div>
     <p class="field-empty" style="line-height:2.2">
       Toggle entity types to show or hide them in the sidebar.<br>
       Hidden types still store data — they can be re-enabled at any time.
     </p>
+    <div class="section-title" style="margin-top:24px; margin-bottom:10px">Layout</div>
+    <div class="layout-toggle">
+      <button class="layout-btn${layoutPref === 'auto'    ? ' active' : ''}" data-layout="auto">Auto</button>
+      <button class="layout-btn${layoutPref === 'desktop' ? ' active' : ''}" data-layout="desktop">Desktop</button>
+      <button class="layout-btn${layoutPref === 'mobile'  ? ' active' : ''}" data-layout="mobile">Mobile</button>
+    </div>
   </div>`;
+
+  detailContent.querySelectorAll('.layout-btn').forEach(btn =>
+    btn.addEventListener('click', () => {
+      setLayoutPref(btn.dataset.layout);
+      detailContent.querySelectorAll('.layout-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.layout === btn.dataset.layout));
+      onUpdate?.();
+    }));
 }
 
 function _renderProjectList(listHeader, entityList, detailContent, onSaved, onSwitch) {
