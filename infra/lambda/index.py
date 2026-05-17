@@ -3,11 +3,12 @@ from datetime import datetime, timezone, timedelta
 from strands import Agent, tool
 from strands.models.bedrock import BedrockModel
 
-ddb     = boto3.resource('dynamodb')
-lam     = boto3.client('lambda')
-s3      = boto3.client('s3')
-cognito = boto3.client('cognito-idp')
-athena  = boto3.client('athena')
+ddb        = boto3.resource('dynamodb')
+lam        = boto3.client('lambda')
+s3         = boto3.client('s3')
+cognito    = boto3.client('cognito-idp')
+athena     = boto3.client('athena')
+bedrock_rt = boto3.client('bedrock-runtime', region_name='us-east-1')
 
 TABLE         = os.environ['JOBS_TABLE']
 WORLD_TABLE   = os.environ.get('WORLD_TABLE', '')
@@ -1095,6 +1096,174 @@ def process(event, context):
             )
 
 
+# ── Cached tool specs (static across every call — defined once at module level) ─
+
+_EXTRACT_TOOL_SPECS = [
+    {
+        "toolSpec": {
+            "name": "get_next_chunk",
+            "description": "Return the next unprocessed text chunk. Returns NO_MORE_CHUNKS when done.",
+            "inputSchema": {"json": {"type": "object", "properties": {}, "required": []}},
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "create_entity",
+            "description": "Create a NEW entity not in the existing list.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "entity_type": {"type": "string",
+                            "description": "character | location | faction | species | event | artifact | lore"},
+                        "name":        {"type": "string"},
+                        "description": {"type": "string"},
+                        "role":        {"type": "string", "description": "characters: role/occupation"},
+                        "loc_type":    {"type": "string", "description": "locations: e.g. Planet, Station, Ship"},
+                        "date":        {"type": "string", "description": "events only"},
+                        "importance":  {"type": "string",
+                            "description": "events: Critical | Major | Minor | Background"},
+                        "gender":      {"type": "string",
+                            "description": "characters: Female | Male | Non-binary"},
+                        "skin_tone":   {"type": "string",
+                            "description": "characters: Very fair | Fair | Light | Medium | Olive | Brown | Dark | Very dark"},
+                        "hair_style":  {"type": "string",
+                            "description": "characters: Bald | Cropped | Short | Medium | Long | Very long"},
+                        "hair_color":  {"type": "string",
+                            "description": "characters: Black | Dark brown | Brown | Light brown | Blonde | Auburn | Red | Gray | White"},
+                        "eye_color":   {"type": "string",
+                            "description": "characters: Dark brown | Brown | Hazel | Amber | Green | Blue | Light blue | Gray"},
+                    },
+                    "required": ["entity_type", "name", "description"],
+                }
+            },
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "update_entity",
+            "description": "Update fields of an EXISTING entity (matched by ID from the existing list).",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "entity_id":    {"type": "string", "description": "the [ID] from the existing entity list"},
+                        "field_updates": {"type": "object", "description": "dict of fields to update"},
+                    },
+                    "required": ["entity_id", "field_updates"],
+                }
+            },
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "create_link",
+            "description": "Record a relationship between two entities.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "source_name": {"type": "string", "description": "exact name of the source entity"},
+                        "target_name": {"type": "string", "description": "exact name of the target entity"},
+                        "label":       {"type": "string",
+                            "description": "short directional label e.g. 'commands', 'member of', 'located in'"},
+                    },
+                    "required": ["source_name", "target_name", "label"],
+                }
+            },
+        }
+    },
+    {"cachePoint": {"type": "default"}},  # cache all tool definitions
+]
+
+_ANALYZE_TOOL_SPECS = [
+    {
+        "toolSpec": {
+            "name": "suggest_link",
+            "description": "Suggest a new relationship link between two entities.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "source_id": {"type": "string", "description": "ID of the source entity"},
+                        "target_id": {"type": "string", "description": "ID of the target entity"},
+                        "label":     {"type": "string", "description": "short directional label"},
+                        "reason":    {"type": "string", "description": "one-line explanation"},
+                    },
+                    "required": ["source_id", "target_id", "label", "reason"],
+                }
+            },
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "suggest_merge",
+            "description": "Suggest merging two entities that appear to be the same thing.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "keep_id":  {"type": "string", "description": "ID to keep"},
+                        "merge_id": {"type": "string", "description": "ID to discard"},
+                        "reason":   {"type": "string", "description": "explanation"},
+                    },
+                    "required": ["keep_id", "merge_id", "reason"],
+                }
+            },
+        }
+    },
+    {"cachePoint": {"type": "default"}},  # cache tool definitions
+]
+
+
+def _bedrock_tool_loop(model_id, system_blocks, initial_messages, tool_specs,
+                       dispatch_fn, usage, max_turns=500):
+    """
+    Runs the Bedrock Converse tool-calling loop with prompt caching.
+    dispatch_fn(tool_name, tool_input) → result_str
+    Returns when the model emits end_turn or max_turns is reached.
+    """
+    messages = list(initial_messages)
+    for _ in range(max_turns):
+        resp = bedrock_rt.converse(
+            modelId=model_id,
+            system=system_blocks,
+            messages=messages,
+            toolConfig={"tools": tool_specs},
+        )
+        u = resp.get('usage', {})
+        if usage is not None:
+            usage['input']  += u.get('inputTokens', 0) + u.get('cacheReadInputTokens', 0)
+            usage['output'] += u.get('outputTokens', 0)
+
+        content = resp['output']['message']['content']
+        messages.append({'role': 'assistant', 'content': content})
+
+        if resp['stopReason'] == 'end_turn':
+            break
+
+        tool_results = []
+        for block in content:
+            tu = block.get('toolUse')
+            if not tu:
+                continue
+            try:
+                result_text = dispatch_fn(tu['name'], tu.get('input', {}))
+            except Exception as e:
+                result_text = f"Error: {e}"
+            tool_results.append({
+                'toolUseId': tu['toolUseId'],
+                'content': [{'text': result_text}],
+                'status': 'success',
+            })
+
+        if tool_results:
+            messages.append({'role': 'user',
+                             'content': [{'toolResult': r} for r in tool_results]})
+        elif resp['stopReason'] == 'tool_use':
+            break  # no tool calls found — shouldn't happen, but avoid infinite loop
+
+
 # ── PDF orchestrator agent ────────────────────────────────────────────────────
 
 def run_extract_pdf_agent(pages: list, existing: list, model_id: str, usage: dict = None) -> dict:
@@ -1155,72 +1324,9 @@ def run_extract_pdf_agent(pages: list, existing: list, model_id: str, usage: dic
 
 # ── Extract agent ─────────────────────────────────────────────────────────────
 
-def run_extract_agent(text: str, existing: list, model_id: str, usage: dict = None) -> dict:
-    words = text.split()
-    state = {
-        'queue':   [' '.join(words[i:i+CHUNK_WORDS]) for i in range(0, len(words), CHUNK_WORDS)],
-        'creates': [], 'updates': [], 'links': [],
-    }
-
-    @tool
-    def get_next_chunk() -> str:
-        """Return the next unprocessed text chunk. Returns NO_MORE_CHUNKS when done."""
-        return state['queue'].pop(0) if state['queue'] else 'NO_MORE_CHUNKS'
-
-    @tool
-    def create_entity(entity_type: str, name: str, description: str,
-                      role: str = '', loc_type: str = '', date: str = '',
-                      importance: str = '', gender: str = '', skin_tone: str = '',
-                      hair_style: str = '', hair_color: str = '', eye_color: str = '') -> str:
-        """Create a NEW entity not found in the existing entity list.
-        Args:
-            entity_type: character | location | faction | species | event | artifact | lore
-            name: entity name
-            description: description or notes
-            role: characters only (e.g. Captain, Engineer)
-            loc_type: locations only (e.g. Planet, Station, Ship)
-            date: events only
-            importance: events only — Critical | Major | Minor | Background
-            gender: characters only — Female | Male | Non-binary
-            skin_tone: characters only — Very fair | Fair | Light | Medium | Olive | Brown | Dark | Very dark
-            hair_style: characters only — Bald | Cropped | Short | Medium | Long | Very long
-            hair_color: characters only — Black | Dark brown | Brown | Light brown | Blonde | Auburn | Red | Gray | White
-            eye_color: characters only — Dark brown | Brown | Hazel | Amber | Green | Blue | Light blue | Gray
-        """
-        entry = {k: v for k, v in {
-            'type': entity_type, 'name': name, 'description': description,
-            'role': role, 'locType': loc_type, 'date': date, 'importance': importance,
-            'gender': gender, 'skinTone': skin_tone,
-            'hairStyle': hair_style, 'hairColor': hair_color, 'eyeColor': eye_color,
-        }.items() if v}
-        state['creates'].append(entry)
-        return f"Queued: {entity_type} '{name}'"
-
-    @tool
-    def update_entity(entity_id: str, field_updates: dict) -> str:
-        """Update fields of an EXISTING entity.
-        Args:
-            entity_id: the [ID] from the existing entity list
-            field_updates: dict of fields to update
-        """
-        state['updates'].append({'id': entity_id, 'changes': field_updates})
-        return f"Queued update for {entity_id}"
-
-    @tool
-    def create_link(source_name: str, target_name: str, label: str) -> str:
-        """Record a relationship between two entities.
-        Args:
-            source_name: exact name of the source entity
-            target_name: exact name of the target entity
-            label: short directional label (e.g. 'commands', 'member of', 'located in')
-        """
-        state['links'].append({'sourceName': source_name, 'targetName': target_name, 'label': label})
-        return f"Linked: '{source_name}' --[{label}]--> '{target_name}'"
-
-    agent = Agent(
-        model=BedrockModel(model_id=model_id),
-        tools=[get_next_chunk, create_entity, update_entity, create_link],
-        system_prompt=(
+_EXTRACT_SYSTEM = [
+    {
+        "text": (
             "You are a literary analyst extracting structured data from novel text.\n\n"
             "ENTITIES: Call create_entity for every named character, location, faction, species, "
             "event, or artifact. If it matches an existing entity, call update_entity instead.\n\n"
@@ -1228,14 +1334,62 @@ def run_extract_agent(text: str, existing: list, model_id: str, usage: dict = No
             "RELATIONSHIPS: Call create_link for every relationship mentioned. "
             "Example: 'Captain Reyes commanded the Argo' → create_link('Captain Reyes','Argo','commands').\n\n"
             "Process all chunks with get_next_chunk before finishing."
-        ),
-    )
+        )
+    },
+    {"cachePoint": {"type": "default"}},   # cache system prompt
+]
 
+def run_extract_agent(text: str, existing: list, model_id: str, usage: dict = None) -> dict:
+    words = text.split()
+    state = {
+        'queue':   [' '.join(words[i:i+CHUNK_WORDS]) for i in range(0, len(words), CHUNK_WORDS)],
+        'creates': [], 'updates': [], 'links': [],
+    }
+
+    def dispatch(name, inp):
+        if name == 'get_next_chunk':
+            return state['queue'].pop(0) if state['queue'] else 'NO_MORE_CHUNKS'
+        if name == 'create_entity':
+            entry = {k: v for k, v in {
+                'type': inp.get('entity_type',''), 'name': inp.get('name',''),
+                'description': inp.get('description',''),
+                'role': inp.get('role',''), 'locType': inp.get('loc_type',''),
+                'date': inp.get('date',''), 'importance': inp.get('importance',''),
+                'gender': inp.get('gender',''), 'skinTone': inp.get('skin_tone',''),
+                'hairStyle': inp.get('hair_style',''), 'hairColor': inp.get('hair_color',''),
+                'eyeColor': inp.get('eye_color',''),
+            }.items() if v}
+            state['creates'].append(entry)
+            return f"Queued: {inp.get('entity_type','')} '{inp.get('name','')}'"
+        if name == 'update_entity':
+            state['updates'].append({'id': inp.get('entity_id',''), 'changes': inp.get('field_updates',{})})
+            return f"Queued update for {inp.get('entity_id','')}"
+        if name == 'create_link':
+            state['links'].append({'sourceName': inp.get('source_name',''),
+                                   'targetName': inp.get('target_name',''),
+                                   'label':      inp.get('label','')})
+            return f"Linked: '{inp.get('source_name','')}' --[{inp.get('label','')}]--> '{inp.get('target_name','')}'"
+        return f"Unknown tool: {name}"
+
+    existing_text = _existing_ctx(existing)
     total = len(state['queue'])
+
+    # Cache point after existing entity context — subsequent turns read it from cache
+    initial_content = []
+    if existing_text:
+        initial_content += [{"text": existing_text}, {"cachePoint": {"type": "default"}}]
+    initial_content.append({"text": f"Process the {total} text chunk(s). "
+                                     "Call get_next_chunk, then create_entity or update_entity for each entity found."})
+
     try:
-        r = agent(f"{_existing_ctx(existing)}Process the {total} text chunk(s). "
-                  "Call get_next_chunk, then create_entity or update_entity for each entity found.")
-        _add_usage(r, usage)
+        _bedrock_tool_loop(
+            model_id=model_id,
+            system_blocks=_EXTRACT_SYSTEM,
+            initial_messages=[{"role": "user", "content": initial_content}],
+            tool_specs=_EXTRACT_TOOL_SPECS,
+            dispatch_fn=dispatch,
+            usage=usage,
+        )
     except Exception as e:
         e._partial = {'creates': _dedupe(state['creates']), 'updates': state['updates'], 'links': state['links']}
         raise
@@ -1244,6 +1398,18 @@ def run_extract_agent(text: str, existing: list, model_id: str, usage: dict = No
 
 
 # ── Analyze agent ─────────────────────────────────────────────────────────────
+
+_ANALYZE_SYSTEM = [
+    {
+        "text": (
+            "You are a literary analyst. Given a list of novel entities, suggest:\n\n"
+            "MISSING LINKS: Relationships that should exist but aren't recorded.\n\n"
+            "DUPLICATES: Entities likely to be the same thing with different names.\n\n"
+            "Only suggest high-confidence items. Skip links that already exist."
+        )
+    },
+    {"cachePoint": {"type": "default"}},   # cache system prompt
+]
 
 def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict:
     state = {'links': [], 'merges': []}
@@ -1262,46 +1428,39 @@ def run_analyze_agent(entities: list, model_id: str, usage: dict = None) -> dict
             + f" | links: {existing_links}"
         )
 
-    @tool
-    def suggest_link(source_id: str, target_id: str, label: str, reason: str) -> str:
-        """Suggest a new relationship link between two entities.
-        Args:
-            source_id: ID of the source entity
-            target_id: ID of the target entity
-            label: short directional label
-            reason: one-line explanation
-        """
-        key = f"{source_id}→{target_id}"
-        if not any(f"{l['sourceId']}→{l['targetId']}" == key for l in state['links']):
-            state['links'].append({'sourceId': source_id, 'targetId': target_id,
-                                   'label': label, 'reason': reason})
-        return f"Suggested: {source_id} --[{label}]--> {target_id}"
+    def dispatch(name, inp):
+        if name == 'suggest_link':
+            src, tgt = inp.get('source_id',''), inp.get('target_id','')
+            key = f"{src}→{tgt}"
+            if not any(f"{l['sourceId']}→{l['targetId']}" == key for l in state['links']):
+                state['links'].append({'sourceId': src, 'targetId': tgt,
+                                       'label': inp.get('label',''), 'reason': inp.get('reason','')})
+            return f"Suggested: {src} --[{inp.get('label','')}]--> {tgt}"
+        if name == 'suggest_merge':
+            state['merges'].append({'keepId': inp.get('keep_id',''),
+                                    'mergeId': inp.get('merge_id',''),
+                                    'reason': inp.get('reason','')})
+            return f"Merge suggested: keep {inp.get('keep_id','')}"
+        return f"Unknown tool: {name}"
 
-    @tool
-    def suggest_merge(keep_id: str, merge_id: str, reason: str) -> str:
-        """Suggest merging two entities that appear to be the same thing.
-        Args:
-            keep_id: ID to keep
-            merge_id: ID to discard
-            reason: explanation
-        """
-        state['merges'].append({'keepId': keep_id, 'mergeId': merge_id, 'reason': reason})
-        return f"Suggested merge: keep {keep_id}, discard {merge_id}"
+    entity_text = "Here are all entities:\n\n" + "\n".join(lines)
 
-    agent = Agent(
-        model=BedrockModel(model_id=model_id),
-        tools=[suggest_link, suggest_merge],
-        system_prompt=(
-            "You are a literary analyst. Given a list of novel entities, suggest:\n\n"
-            "MISSING LINKS: Relationships that should exist but aren't recorded.\n\n"
-            "DUPLICATES: Entities likely to be the same thing with different names.\n\n"
-            "Only suggest high-confidence items. Skip links that already exist."
-        ),
-    )
+    # Cache point after entity list — on turns 2-N the model reads it from cache
+    initial_messages = [{"role": "user", "content": [
+        {"text": entity_text},
+        {"cachePoint": {"type": "default"}},
+        {"text": "\nSuggest missing links and potential merges."},
+    ]}]
 
     try:
-        r = agent("Here are all entities:\n\n" + "\n".join(lines) + "\n\nSuggest missing links and potential merges.")
-        _add_usage(r, usage)
+        _bedrock_tool_loop(
+            model_id=model_id,
+            system_blocks=_ANALYZE_SYSTEM,
+            initial_messages=initial_messages,
+            tool_specs=_ANALYZE_TOOL_SPECS,
+            dispatch_fn=dispatch,
+            usage=usage,
+        )
     except Exception as e:
         e._partial = {'links': state['links'], 'merges': state['merges']}
         raise
