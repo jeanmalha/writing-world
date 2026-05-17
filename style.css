@@ -2026,6 +2026,38 @@ body.board-mode #board-panel {
 #btn-chat-toggle:hover { color: #34d399; }
 #btn-chat-toggle.active { color: #34d399; }
 
+/* ── AI History tab ──────────────────────────────────── */
+.ai-hist-loading { padding: 16px; font-size: 11px; color: var(--text-muted); }
+.ai-hist-list    { display: flex; flex-direction: column; }
+.ai-hist-row {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle, var(--panel-border));
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-hist-row:hover    { background: var(--hover-bg); }
+.ai-hist-row.selected { background: var(--hover-bg); border-left: 2px solid var(--accent); }
+.ai-hist-row-main { display: flex; justify-content: space-between; align-items: center; }
+.ai-hist-row-sub  { display: flex; gap: 8px; align-items: center; }
+.ai-hist-type   { font-size: 11px; color: var(--text); }
+.ai-hist-date   { font-size: 10px; color: var(--text-muted); }
+.ai-hist-count  { font-size: 10px; color: var(--accent); }
+.ai-hist-model  { font-size: 10px; color: var(--text-muted); }
+.ai-hist-status { font-size: 10px; }
+.hist-done { color: #34d399; }
+.hist-err  { color: var(--warning, #f59e0b); }
+.hist-proc { color: var(--text-muted); }
+.ai-partial-banner {
+  padding: 8px 14px;
+  background: rgba(245,158,11,.12);
+  border-left: 3px solid var(--warning, #f59e0b);
+  font-size: 11px;
+  color: var(--warning, #f59e0b);
+  margin-bottom: 8px;
+}
+
 /* ── Admin ─────────────────────────────────────────── */
 .admin-header {
   display: flex;

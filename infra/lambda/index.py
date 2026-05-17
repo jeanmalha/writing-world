@@ -200,6 +200,10 @@ def handler(event, context):
     method = ctx.get('method', '')
     path   = ctx.get('path', '').rstrip('/')
 
+    if method == 'GET'  and path.endswith('/jobs') and '/jobs/' not in path:
+        return list_jobs(event)
+    if method == 'GET'  and '/jobs/' in path:
+        return poll(path.split('/')[-1])
     if method == 'GET'  and path.endswith('/features'):
         return get_features()
     if method == 'PUT'  and '/admin/features/' in path:
@@ -702,6 +706,33 @@ def admin_visits(event):
 
 # ── Admin — tiers ─────────────────────────────────────────────────────────────
 
+def list_jobs(event):
+    uid = _user_id(event)
+    if not uid:
+        return out(401, {'error': 'unauthorized'})
+    try:
+        from boto3.dynamodb.conditions import Key as DKey
+        resp = ddb.Table(TABLE).query(
+            IndexName='UserJobsIndex',
+            KeyConditionExpression=DKey('userId').eq(uid),
+            ScanIndexForward=False,   # newest first
+            Limit=100,
+        )
+        jobs = []
+        for item in resp.get('Items', []):
+            jobs.append({
+                'jobId':       item['jobId'],
+                'jobType':     item.get('jobType', 'extract'),
+                'status':      item.get('status', 'unknown'),
+                'startedAt':   item.get('startedAt', ''),
+                'modelMode':   item.get('modelMode', ''),
+                'entityCount': int(item.get('entityCount', 0)),
+            })
+        return out(200, {'jobs': jobs})
+    except Exception as e:
+        return out(500, {'error': str(e)})
+
+
 # Maximum model allowed per tier (ceiling, cannot be overridden by admin)
 TIER_CEILINGS = {'explorer': 'simple', 'trailblazer': 'medium', 'uncharted': 'complex'}
 MODEL_RANK     = {'simple': 0, 'medium': 1, 'complex': 2}
@@ -1028,31 +1059,39 @@ def process(event, context):
         else:
             result = run_analyze_agent(existing, model_id, usage)
 
+        ttl90 = int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp())
+        entity_count = len(result.get('creates', [])) + len(result.get('updates', [])) + \
+                       len(result.get('links', [])) + len(result.get('merges', []))
         table.update_item(
             Key={'jobId': job_id},
-            UpdateExpression='SET #s = :s, #r = :r',
-            ExpressionAttributeNames={'#s': 'status', '#r': 'result'},
-            ExpressionAttributeValues={':s': 'done', ':r': json.dumps(result)},
+            UpdateExpression='SET #s = :s, #r = :r, entityCount = :ec, #ttl = :ttl',
+            ExpressionAttributeNames={'#s': 'status', '#r': 'result', '#ttl': 'ttl'},
+            ExpressionAttributeValues={':s': 'done', ':r': json.dumps(result),
+                                        ':ec': entity_count, ':ttl': ttl90},
         )
         _record_usage(user_id, usage['input'], usage['output'])
 
     except Exception as e:
         # Save whatever partial result the agent accumulated before failing
         partial = getattr(e, '_partial', None)
+        ttl90 = int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp())
         if partial:
+            ec = len(partial.get('creates', [])) + len(partial.get('updates', [])) + \
+                 len(partial.get('links', [])) + len(partial.get('merges', []))
             table.update_item(
                 Key={'jobId': job_id},
-                UpdateExpression='SET #s = :s, #e = :e, #r = :r',
-                ExpressionAttributeNames={'#s': 'status', '#e': 'error', '#r': 'result'},
+                UpdateExpression='SET #s = :s, #e = :e, #r = :r, entityCount = :ec, #ttl = :ttl',
+                ExpressionAttributeNames={'#s': 'status', '#e': 'error', '#r': 'result', '#ttl': 'ttl'},
                 ExpressionAttributeValues={':s': 'error', ':e': str(e),
-                                           ':r': json.dumps({**partial, 'partial': True})},
+                                           ':r': json.dumps({**partial, 'partial': True}),
+                                           ':ec': ec, ':ttl': ttl90},
             )
         else:
             table.update_item(
                 Key={'jobId': job_id},
-                UpdateExpression='SET #s = :s, #e = :e',
-                ExpressionAttributeNames={'#s': 'status', '#e': 'error'},
-                ExpressionAttributeValues={':s': 'error', ':e': str(e)},
+                UpdateExpression='SET #s = :s, #e = :e, #ttl = :ttl',
+                ExpressionAttributeNames={'#s': 'status', '#e': 'error', '#ttl': 'ttl'},
+                ExpressionAttributeValues={':s': 'error', ':e': str(e), ':ttl': ttl90},
             )
 
 

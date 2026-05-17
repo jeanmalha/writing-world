@@ -212,6 +212,18 @@ export async function updateAdminFeature(flagId, data) {
   return resp.json();
 }
 
+export async function listJobs() {
+  const resp = await apiFetch('/jobs');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function getJob(jobId) {
+  const resp = await apiFetch(`/jobs/${jobId}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
 export async function pollJob(endpoint, jobId) {
   const resp = await apiFetch(`/${endpoint}/${jobId}`);
   if (!resp.ok) {

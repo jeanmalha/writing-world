@@ -1,9 +1,9 @@
 import { store, TYPES } from './store.js';
 import { isAuthenticated, login, getUserTier } from './auth.js';
-import { startExtraction, startAnalysis, startPdfExtraction, startStructureExtraction, pollJob } from './api.js';
+import { startExtraction, startAnalysis, startPdfExtraction, startStructureExtraction, pollJob, listJobs, getJob } from './api.js';
 
 // Module state — persists while AI view is active
-let _mode             = 'extract';   // 'extract' | 'analyze'
+let _mode             = 'extract';   // 'extract' | 'analyze' | 'history'
 let _source           = 'text';      // 'text' | 'pdf'
 let _model            = 'simple';    // 'simple' | 'medium' | 'complex'
 let _includeStructure = false;
@@ -51,6 +51,7 @@ function renderAiList(listHeader, entityList, detailContent) {
 
   const extractActive = _mode === 'extract' ? ' active' : '';
   const analyzeActive = _mode === 'analyze' ? ' active' : '';
+  const historyActive = _mode === 'history' ? ' active' : '';
 
   listHeader.innerHTML = `<div class="admin-header">
     <div class="list-header-row">
@@ -60,6 +61,7 @@ function renderAiList(listHeader, entityList, detailContent) {
     ${auth ? `<div class="admin-tabs">
       <button class="admin-tab${extractActive}" id="btn-mode-extract">◈ Extract</button>
       <button class="admin-tab${analyzeActive}" id="btn-mode-analyze">◎ Analyze</button>
+      <button class="admin-tab${historyActive}" id="btn-mode-history">↺ History</button>
     </div>` : ''}
   </div>`;
 
@@ -68,6 +70,10 @@ function renderAiList(listHeader, entityList, detailContent) {
   });
   listHeader.querySelector('#btn-mode-analyze')?.addEventListener('click', () => {
     if (_mode !== 'analyze') { _mode = 'analyze'; _results = null; _status = ''; rerender(listHeader, entityList, detailContent); }
+  });
+  listHeader.querySelector('#btn-mode-history')?.addEventListener('click', () => {
+    if (_mode !== 'history') { _mode = 'history'; _results = null; _status = ''; renderHistory(listHeader, entityList, detailContent); }
+    else renderHistory(listHeader, entityList, detailContent);
   });
 
   if (!auth) {
@@ -79,6 +85,8 @@ function renderAiList(listHeader, entityList, detailContent) {
     document.getElementById('btn-ai-signin')?.addEventListener('click', login);
     return;
   }
+
+  if (_mode === 'history') { renderHistory(listHeader, entityList, detailContent); return; }
 
   entityList.innerHTML = _mode === 'extract' ? renderExtractInput() : renderAnalyzeInput();
 
@@ -440,6 +448,81 @@ async function runJob(startFn, endpoint, listHeader, entityList, detailContent) 
     _polling = false;
     rerender(listHeader, entityList, detailContent);
   }
+}
+
+// ── History ────────────────────────────────────────────────────────────────────
+
+const JOB_TYPE_LABELS = {
+  'extract':           '◈ Text extract',
+  'extract-pdf':       '◈ PDF extract',
+  'extract-structure': '▤ Structure',
+  'analyze':           '◎ Analyze',
+};
+
+async function renderHistory(listHeader, entityList, detailContent) {
+  entityList.innerHTML = '<div class="ai-hist-loading">Loading…</div>';
+  detailContent.innerHTML = '<div class="empty-state detail-empty">Select a job to view its results.</div>';
+
+  let jobs;
+  try { jobs = (await listJobs()).jobs || []; }
+  catch (e) { entityList.innerHTML = `<div class="empty-state">${esc(e.message)}</div>`; return; }
+
+  if (!jobs.length) {
+    entityList.innerHTML = '<div class="empty-state">No past jobs yet.</div>';
+    return;
+  }
+
+  entityList.innerHTML = `<div class="ai-hist-list">` +
+    jobs.map(j => {
+      const date    = j.startedAt ? new Date(j.startedAt).toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+      const typeLabel = JOB_TYPE_LABELS[j.jobType] || j.jobType;
+      const statusIcon = j.status === 'done' ? '✓' : j.status === 'error' ? '⚠' : '…';
+      const statusCls  = j.status === 'done' ? 'hist-done' : j.status === 'error' ? 'hist-err' : 'hist-proc';
+      const count = j.entityCount ? `${j.entityCount} items` : '';
+      return `<div class="ai-hist-row" data-job-id="${j.jobId}" data-job-type="${j.jobType}">
+        <div class="ai-hist-row-main">
+          <span class="ai-hist-type">${typeLabel}</span>
+          <span class="ai-hist-status ${statusCls}">${statusIcon}</span>
+        </div>
+        <div class="ai-hist-row-sub">
+          <span class="ai-hist-date">${date}</span>
+          ${count ? `<span class="ai-hist-count">${count}</span>` : ''}
+          <span class="ai-hist-model">${j.modelMode || ''}</span>
+        </div>
+      </div>`;
+    }).join('') + `</div>`;
+
+  entityList.querySelectorAll('.ai-hist-row').forEach(row => {
+    row.addEventListener('click', async () => {
+      entityList.querySelectorAll('.ai-hist-row').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
+      detailContent.innerHTML = '<div class="empty-state detail-empty">Loading…</div>';
+      try {
+        const job = await getJob(row.dataset.jobId);
+        if (!job.result) {
+          detailContent.innerHTML = `<div class="empty-state detail-empty">${
+            job.status === 'error' ? `Job failed: ${esc(job.error || 'unknown error')}` : 'No results stored.'
+          }</div>`;
+          return;
+        }
+        _results = job.result;
+        // Render using the appropriate results function
+        if (job.result.links !== undefined && job.result.merges !== undefined) {
+          renderAnalyzeResults(detailContent);
+        } else {
+          renderExtractResults(detailContent);
+        }
+        if (job.result.partial) {
+          const banner = document.createElement('div');
+          banner.className = 'ai-partial-banner';
+          banner.textContent = '⚠ This job was interrupted — showing partial results.';
+          detailContent.prepend(banner);
+        }
+      } catch (e) {
+        detailContent.innerHTML = `<div class="empty-state detail-empty">${esc(e.message)}</div>`;
+      }
+    });
+  });
 }
 
 function rerender(listHeader, entityList, detailContent) {

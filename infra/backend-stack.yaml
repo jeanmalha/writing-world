@@ -198,6 +198,20 @@ Resources:
       AttributeDefinitions:
         - AttributeName: jobId
           AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: startedAt
+          AttributeType: S
+      GlobalSecondaryIndexes:
+        - IndexName: UserJobsIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: startedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [jobType, status, modelMode, entityCount]
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
@@ -318,8 +332,10 @@ Resources:
                   - dynamodb:GetItem
                   - dynamodb:UpdateItem
                   - dynamodb:Scan
+                  - dynamodb:Query
                 Resource:
                   - !GetAtt JobsTable.Arn
+                  - !Sub '${JobsTable.Arn}/index/UserJobsIndex'
                   - !GetAtt WorldTable.Arn
               - Effect: Allow
                 Action:
@@ -707,6 +723,24 @@ Resources:
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: GET /admin/interest
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetJobsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /jobs
+      AuthorizationType: JWT
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ExtractIntegration}'
+
+  GetJobByIdRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /jobs/{jobId}'
       AuthorizationType: JWT
       AuthorizerId: !Ref JwtAuthorizer
       Target: !Sub 'integrations/${ExtractIntegration}'
