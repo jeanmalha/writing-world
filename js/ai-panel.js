@@ -341,7 +341,6 @@ async function runPdfExtract(listHeader, entityList, detailContent) {
 async function runParallelExtract(entityStartFn, structStartFn, listHeader, entityList, detailContent, entityEndpoint = 'extract') {
   _loading = true; _status = 'Starting…'; _results = null; _polling = true;
   rerender(listHeader, entityList, detailContent);
-  _syncSendBtn();
 
   try {
     const [entityJob, structJob] = await Promise.all([entityStartFn(), structStartFn()]);
@@ -367,7 +366,6 @@ async function runParallelExtract(entityStartFn, structStartFn, listHeader, enti
   } finally {
     _loading = false; _polling = false;
     rerender(listHeader, entityList, detailContent);
-    _syncSendBtn();
   }
 }
 
