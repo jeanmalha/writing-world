@@ -241,6 +241,7 @@ async function _renderTiers(entityList, detailContent) {
         <span class="admin-tier-name" style="color:${TIER_COLORS[t.tierId] || 'var(--accent)'}">${_esc(t.label)}</span>
         <div class="admin-tier-model-toggle">
           <button class="admin-model-btn${t.model === 'simple'  ? ' active' : ''}" data-tier="${t.tierId}" data-model="simple">Simple</button>
+          <button class="admin-model-btn${t.model === 'medium'  ? ' active' : ''}" data-tier="${t.tierId}" data-model="medium">Medium</button>
           <button class="admin-model-btn${t.model === 'complex' ? ' active' : ''}" data-tier="${t.tierId}" data-model="complex">Complex</button>
         </div>
       </div>

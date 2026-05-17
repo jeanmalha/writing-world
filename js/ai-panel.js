@@ -5,7 +5,7 @@ import { startExtraction, startAnalysis, startPdfExtraction, startStructureExtra
 // Module state — persists while AI view is active
 let _mode             = 'extract';   // 'extract' | 'analyze'
 let _source           = 'text';      // 'text' | 'pdf'
-let _model            = 'simple';    // 'simple' | 'complex'
+let _model            = 'simple';    // 'simple' | 'medium' | 'complex'
 let _includeStructure = false;
 let _text    = '';
 let _results = null;
@@ -110,6 +110,9 @@ function renderAiList(listHeader, entityList, detailContent) {
   document.getElementById('btn-model-simple')?.addEventListener('click', () => {
     if (_model !== 'simple') { _model = 'simple'; rerender(listHeader, entityList, detailContent); }
   });
+  document.getElementById('btn-model-medium')?.addEventListener('click', () => {
+    if (_model !== 'medium') { _model = 'medium'; rerender(listHeader, entityList, detailContent); }
+  });
   document.getElementById('btn-model-complex')?.addEventListener('click', () => {
     if (_model !== 'complex') { _model = 'complex'; rerender(listHeader, entityList, detailContent); }
   });
@@ -136,21 +139,28 @@ function renderAiList(listHeader, entityList, detailContent) {
 }
 
 function _modelToggleHtml() {
-  const tier         = getUserTier();
-  const explorerOnly = tier === 'explorer';
-  const blocked      = explorerOnly && _model === 'complex';
+  const tier    = getUserTier();
+  const rank    = { simple: 0, medium: 1, complex: 2 };
+  const maxRank = tier === 'uncharted' ? 2 : tier === 'trailblazer' ? 1 : 0;
+  const blocked = rank[_model] > maxRank;
+  const upgradeMsg = maxRank === 0
+    ? `<div class="ai-upgrade-notice">◈ <strong>Trailblazer</strong> required for Medium · <strong>Uncharted</strong> for Complex.</div>`
+    : maxRank === 1
+    ? `<div class="ai-upgrade-notice">◈ <strong>Uncharted</strong> required for Complex.</div>`
+    : '';
   return `
     <div class="ai-model-toggle">
       <button class="ai-model-btn${_model === 'simple'  ? ' active' : ''}" id="btn-model-simple">Simple</button>
+      <button class="ai-model-btn${_model === 'medium'  ? ' active' : ''}" id="btn-model-medium">Medium</button>
       <button class="ai-model-btn${_model === 'complex' ? ' active' : ''}" id="btn-model-complex">Complex</button>
     </div>
-    ${blocked ? `<div class="ai-upgrade-notice">◈ <strong>Trailblazer</strong> or <strong>Uncharted</strong> required for Complex.</div>` : ''}`;
+    ${blocked ? upgradeMsg : ''}`;
 }
 
 function renderExtractInput() {
   const srcText = _source === 'text';
   const tier    = getUserTier();
-  const blocked = tier === 'explorer' && _model === 'complex';
+  const blocked = ({ simple: 0, medium: 1, complex: 2 }[_model] || 0) > (tier === 'uncharted' ? 2 : tier === 'trailblazer' ? 1 : 0);
   return `<div class="ai-input-area">
     <div class="ai-source-toggle">
       <button class="ai-src-btn${srcText ? ' active' : ''}" id="btn-src-text">Text</button>
@@ -235,7 +245,7 @@ async function runStructureExtract(listHeader, entityList, detailContent) {
 function renderAnalyzeInput() {
   const count   = store.totalCount();
   const tier    = getUserTier();
-  const blocked = tier === 'explorer' && _model === 'complex';
+  const blocked = ({ simple: 0, medium: 1, complex: 2 }[_model] || 0) > (tier === 'uncharted' ? 2 : tier === 'trailblazer' ? 1 : 0);
   return `<div class="ai-input-area">
     <div class="ai-analyze-desc">
       Analyzes your <strong>${count}</strong> existing entr${count !== 1 ? 'ies' : 'y'} and suggests missing links and potential duplicates.

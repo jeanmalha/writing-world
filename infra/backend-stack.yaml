@@ -15,6 +15,11 @@ Parameters:
     Default: openai.gpt-oss-20b-1:0
     Description: Fast model for Simple mode
 
+  MediumModel:
+    Type: String
+    Default: openai.gpt-oss-120b-1:0
+    Description: Mid-range model for Medium mode
+
   ComplexModel:
     Type: String
     Default: global.anthropic.claude-sonnet-4-6
@@ -410,6 +415,7 @@ Resources:
       Environment:
         Variables:
           SIMPLE_MODEL: !Ref SimpleModel
+          MEDIUM_MODEL: !Ref MediumModel
           COMPLEX_MODEL: !Ref ComplexModel
           JOBS_TABLE: !Ref JobsTable
           WORLD_TABLE: !Ref WorldTable
@@ -440,6 +446,7 @@ Resources:
       Environment:
         Variables:
           SIMPLE_MODEL: !Ref SimpleModel
+          MEDIUM_MODEL: !Ref MediumModel
           COMPLEX_MODEL: !Ref ComplexModel
           JOBS_TABLE: !Ref JobsTable
           WORLD_TABLE: !Ref WorldTable

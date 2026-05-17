@@ -21,12 +21,15 @@ ATHENA_RESULTS_BUCKET = os.environ.get('ATHENA_RESULTS_BUCKET', '')
 FEATURES_TABLE        = os.environ.get('FEATURES_TABLE', '')
 VISITS_TABLE          = os.environ.get('VISITS_TABLE', '')
 SIMPLE_MODEL  = os.environ.get('SIMPLE_MODEL',  'openai.gpt-oss-20b-1:0')
+MEDIUM_MODEL  = os.environ.get('MEDIUM_MODEL',  'openai.gpt-oss-120b-1:0')
 COMPLEX_MODEL = os.environ.get('COMPLEX_MODEL', 'global.anthropic.claude-sonnet-4-6')
 CHUNK_WORDS     = 2000
 PDF_CHUNK_PAGES = 5
 
 def resolve_model(mode):
-    return COMPLEX_MODEL if mode == 'complex' else SIMPLE_MODEL
+    if mode == 'complex': return COMPLEX_MODEL
+    if mode == 'medium':  return MEDIUM_MODEL
+    return SIMPLE_MODEL
 
 
 # ── Tier system ───────────────────────────────────────────────────────────────
@@ -45,7 +48,7 @@ FEATURE_DEFAULTS = {
 
 TIER_DEFAULTS = {
     'explorer':    {'model': 'simple',  'dailyLimit': 50_000,    'weeklyLimit': 200_000,   'monthlyLimit': 500_000},
-    'trailblazer': {'model': 'complex', 'dailyLimit': 200_000,   'weeklyLimit': 1_000_000, 'monthlyLimit': 3_000_000},
+    'trailblazer': {'model': 'medium',  'dailyLimit': 200_000,   'weeklyLimit': 1_000_000, 'monthlyLimit': 3_000_000},
     'uncharted':   {'model': 'complex', 'dailyLimit': 0,         'weeklyLimit': 0,         'monthlyLimit': 0},
 }
 
@@ -243,13 +246,15 @@ def start_job(event, job_type):
     if not ok:
         return out(429, {'error': reason})
 
-    # Determine model: user may request 'simple' or 'complex', but Explorer is capped at 'simple'
+    # Model tier ordering: simple < medium < complex
+    MODEL_RANK = {'simple': 0, 'medium': 1, 'complex': 2}
     requested = body.get('model', tier_config['model'])
-    if requested not in ('simple', 'complex'):
+    if requested not in MODEL_RANK:
         requested = tier_config['model']
-    if requested == 'complex' and tier_config['model'] == 'simple':
+    tier_max = tier_config['model']
+    if MODEL_RANK.get(requested, 0) > MODEL_RANK.get(tier_max, 0):
         return out(403, {'error': 'upgrade_required',
-                         'message': 'Upgrade to Trailblazer or Uncharted to use the Complex model.'})
+                         'message': f'Your tier allows up to the {tier_max} model. Upgrade for access to higher tiers.'})
     mode = requested
 
     job_id = str(uuid.uuid4())
@@ -709,8 +714,8 @@ def admin_update_tier(event, tier_id):
     weekly   = int(body.get('weeklyLimit',  defaults['weeklyLimit']))
     monthly  = int(body.get('monthlyLimit', defaults['monthlyLimit']))
 
-    if model not in ('simple', 'complex'):
-        return out(400, {'error': 'model must be simple or complex'})
+    if model not in ('simple', 'medium', 'complex'):
+        return out(400, {'error': 'model must be simple, medium, or complex'})
 
     ddb.Table(TIERS_TABLE).put_item(Item={
         'tierId':       tier_id,
