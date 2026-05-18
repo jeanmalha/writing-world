@@ -102,7 +102,7 @@ z.head.insertBefore(u,z.head.firstElementChild);
 x[n]=x[n]||{{q:[]}};x[n].q.push(i);
 x[n][v]=function(){{x[n].q.push([v].concat(Array.prototype.slice.call(arguments,0)))}}}}(
   'cwr', '{monitor_id}', 'recordEvent',
-  'https://client.rum.us-east-1.amazonaws.com/1.x.x/cwr.js',
+  'https://client.rum.us-east-1.amazonaws.com/1.21.0/cwr.js',
   {{sessionSampleRate:1,
    guestRoleArn:"{role_arn}",
    identityPoolId:"{pool_id}",
