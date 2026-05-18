@@ -10,6 +10,12 @@ Parameters:
     Type: String
     Default: https://lore.malha.land
 
+  AllowLocalhostCors:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Allow http://localhost:8080 in CORS — set true only for local development
+
   SimpleModel:
     Type: String
     Default: openai.gpt-oss-20b-1:0
@@ -30,6 +36,9 @@ Parameters:
     Description: S3 bucket holding lambda/extract.zip (set by deploy-backend.sh)
 
 
+Conditions:
+  LocalhostCorsAllowed: !Equals [!Ref AllowLocalhostCors, 'true']
+
 Resources:
 
   # ── Cognito ──────────────────────────────────────────────────────────────────
@@ -49,10 +58,10 @@ Resources:
           EmailMessage: "<p>Hello {username},</p><p>You have been invited to <strong>Lore</strong>, a knowledge management tool for writers.</p><p>Your temporary password is: <strong>{####}</strong></p><p>Sign in at <a href=\"https://lore.malha.land\">lore.malha.land</a> — you will be prompted to set a new password on first login.</p><p>— The Lore team</p>"
       Policies:
         PasswordPolicy:
-          MinimumLength: 8
-          RequireUppercase: false
-          RequireLowercase: false
-          RequireNumbers: false
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
           RequireSymbols: false
       AccountRecoverySetting:
         RecoveryMechanisms:
@@ -496,9 +505,10 @@ Resources:
       Name: writing-world-api
       ProtocolType: HTTP
       CorsConfiguration:
-        AllowOrigins:
-          - !Ref FrontendOrigin
-          - http://localhost:8080
+        AllowOrigins: !If
+          - LocalhostCorsAllowed
+          - [!Ref FrontendOrigin, 'http://localhost:8080']
+          - [!Ref FrontendOrigin]
         AllowMethods:
           - POST
           - GET

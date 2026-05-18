@@ -68,6 +68,8 @@ success "Lambda package uploaded."
 PARAM_OVERRIDES="CognitoDomainPrefix=${COGNITO_DOMAIN_PREFIX:?} LambdaBucket=${LAMBDA_BUCKET}"
 [[ -n "${SIMPLE_MODEL:-}"  ]] && PARAM_OVERRIDES="$PARAM_OVERRIDES SimpleModel=$SIMPLE_MODEL"
 [[ -n "${COMPLEX_MODEL:-}" ]] && PARAM_OVERRIDES="$PARAM_OVERRIDES ComplexModel=$COMPLEX_MODEL"
+# Set ALLOW_LOCALHOST_CORS=true in backend.env only for local development
+[[ "${ALLOW_LOCALHOST_CORS:-false}" == "true" ]] && PARAM_OVERRIDES="$PARAM_OVERRIDES AllowLocalhostCors=true"
 
 info "Deploying backend stack '$STACK'…"
 aws cloudformation deploy \

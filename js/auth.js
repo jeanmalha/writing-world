@@ -5,7 +5,6 @@ export const isAuthEnabled = AUTH_CONFIG !== null;
 const LS = {
   ACCESS:   'ww_at',
   ID:       'ww_it',
-  REFRESH:  'ww_rt',
   EXPIRY:   'ww_exp',
   VERIFIER: 'ww_pkce',
 };
@@ -59,10 +58,10 @@ export async function handleCallback() {
   const tokens = await resp.json();
   if (!tokens.access_token) return false;
 
-  localStorage.setItem(LS.ACCESS,  tokens.access_token);
-  localStorage.setItem(LS.ID,      tokens.id_token     || '');
-  localStorage.setItem(LS.REFRESH, tokens.refresh_token || '');
-  localStorage.setItem(LS.EXPIRY,  String(Date.now() + (tokens.expires_in || 3600) * 1000));
+  localStorage.setItem(LS.ACCESS, tokens.access_token);
+  localStorage.setItem(LS.ID,     tokens.id_token || '');
+  localStorage.setItem(LS.EXPIRY, String(Date.now() + (tokens.expires_in || 3600) * 1000));
+  // Refresh token intentionally not stored — re-auth required when access token expires.
   sessionStorage.removeItem(LS.VERIFIER);
   window.history.replaceState({}, '', window.location.pathname);
   return true;
@@ -119,7 +118,11 @@ export function getUserTier() {
 }
 
 export function logout() {
-  [LS.ACCESS, LS.ID, LS.REFRESH, LS.EXPIRY].forEach(k => localStorage.removeItem(k));
+  [LS.ACCESS, LS.ID, LS.EXPIRY].forEach(k => localStorage.removeItem(k));
+  // Clear any cached encryption keys from the session
+  for (const key of Object.keys(sessionStorage)) {
+    if (key.startsWith('lore_key_')) sessionStorage.removeItem(key);
+  }
   if (!isAuthEnabled) return;
   window.location.href = `${AUTH_CONFIG.cognitoDomain}/logout?` + new URLSearchParams({
     client_id:  AUTH_CONFIG.clientId,
