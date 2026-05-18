@@ -11,8 +11,11 @@ import { loadWorld, saveWorld } from './api.js';
 import { initBoard, renderBoard } from './board.js';
 import { initTheme, getTheme, setTheme } from './theme.js';
 import { initLayout, isMobileLayout } from './layout.js';
+import { generateKey, exportKey, importKey } from './crypto.js';
 import { getFeatures, postTelemetry } from './api.js';
 import { setAssistantModel } from './llm.js';
+
+let _exportedKey = null; // cached JWK string for cloud saves
 
 // ── State ──────────────────────────────────────────────
 const state = {
@@ -857,63 +860,49 @@ function updateStatus() {
 // ── Cloud sync ──────────────────────────────────────────
 let _cloudSaveTimer = null;
 
-const LAST_USER_KEY = 'lore_last_user_sub';
-
 async function initCloudSync() {
   if (!isAuthenticated()) return;
 
-  // If a different user is now logged in, wipe the previous user's local data
-  // so we never accidentally push User A's lore to User B's cloud.
-  const currentSub = getUserSub();
-  const lastSub    = localStorage.getItem(LAST_USER_KEY);
-  if (currentSub && lastSub && currentSub !== lastSub) {
-    store.clearLocalData();
-    state.selectedId = null;
-    state.editing    = false;
-    renderAll();
-  }
-  if (currentSub) localStorage.setItem(LAST_USER_KEY, currentSub);
+  const userId = getUserSub();
 
-  // Load cloud world and resolve conflicts
   try {
-    const cloud = await loadWorld();
-    if (cloud?.data) {
-      const localAt = store.dataUpdatedAt() || '';
-      const cloudAt = cloud.updatedAt || '';
+    // Fetch cloud world — this is the authoritative source
+    const cloud = await loadWorld(); // { data, content, cryptoKey, updatedAt } | null
 
-      if (!store.totalCount()) {
-        // Nothing local — take cloud silently
-        store.loadData(cloud.data);
-        store.mergeContent(cloud.content || {});
-        renderAll();
-      } else if (cloudAt > localAt) {
-        // Cloud is newer — preserve local content before wiping, then merge both
-        const localContent = store.extractContent();
-        store.loadData(cloud.data);
-        // Cloud content wins where it exists; local fills in anything S3 doesn't have
-        store.mergeContent({ ...localContent, ...(cloud.content || {}) });
-        // If local had content that isn't in S3 yet, push it up
-        if (Object.keys(localContent).length) {
-          await saveWorld(store.exportDataWithoutContent(), store.extractContent()).catch(() => {});
-        }
-        renderAll();
-        showBanner('Loaded your world from cloud.', 4000);
-      } else if (localAt > cloudAt) {
-        // Local is newer — push it up silently
-        await saveWorld(store.exportDataWithoutContent(), store.extractContent());
-        _cloudStatus = 'synced'; updateStatus();
-      } else {
-        // Equal timestamps — entities match, but local content may not be in S3 yet
-        const localContent = store.extractContent();
-        if (Object.keys(localContent).length && !Object.keys(cloud.content || {}).length) {
-          await saveWorld(store.exportDataWithoutContent(), localContent).catch(() => {});
-        }
-      }
-    } else if (store.totalCount()) {
-      // No cloud save yet — push local up
-      await saveWorld(store.exportDataWithoutContent(), store.extractContent());
+    // Resolve or generate the encryption key
+    let cryptoKey;
+    if (cloud?.cryptoKey) {
+      cryptoKey = await importKey(cloud.cryptoKey);
+      _exportedKey = cloud.cryptoKey;
+    } else {
+      // New user — generate key, will be saved with first push
+      cryptoKey = await generateKey();
+      _exportedKey = await exportKey(cryptoKey);
+    }
+
+    // Cache key in sessionStorage so fast re-loads within the session work
+    sessionStorage.setItem(`lore_key_${userId}`, _exportedKey);
+
+    // Switch store to user-namespaced encrypted storage
+    // (this loads cached local data if the key was already in sessionStorage)
+    await store.setUser(userId, cryptoKey);
+
+    if (cloud?.data) {
+      // Cloud is authoritative — load it unconditionally
+      store.loadData(cloud.data);
+      store.mergeContent(cloud.content || {});
+      renderAll();
+    } else {
+      // No cloud record yet — push whatever is in the local cache
+      await saveWorld(store.exportDataWithoutContent(), store.extractContent(), _exportedKey);
       _cloudStatus = 'synced'; updateStatus();
     }
+
+    // Migration prompt: legacy anonymous data found
+    if (store.hasLegacyData()) {
+      _showMigrationPrompt(cryptoKey);
+    }
+
   } catch (err) {
     console.warn('Cloud sync init failed:', err);
   }
@@ -924,13 +913,47 @@ async function initCloudSync() {
     clearTimeout(_cloudSaveTimer);
     _cloudSaveTimer = setTimeout(async () => {
       try {
-        await saveWorld(store.exportDataWithoutContent(), store.extractContent());
+        await saveWorld(store.exportDataWithoutContent(), store.extractContent(), _exportedKey);
         _cloudStatus = 'synced';
       } catch {
         _cloudStatus = 'error';
       }
       updateStatus();
     }, 2000);
+  });
+}
+
+function _showMigrationPrompt() {
+  if (sessionStorage.getItem('lore_migration_dismissed')) return;
+  if ($('migration-banner')) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'migration-banner';
+  banner.className = 'migration-banner';
+  banner.innerHTML = `
+    <span class="mig-msg">Found unassociated local data. Move it to your account?</span>
+    <button id="btn-mig-yes">Migrate</button>
+    <button id="btn-mig-no">Discard</button>`;
+  document.body.appendChild(banner);
+
+  $('btn-mig-yes')?.addEventListener('click', async () => {
+    const legacy = store.getLegacyData();
+    if (legacy && !store.totalCount()) {
+      store.loadData(legacy);
+      await saveWorld(store.exportDataWithoutContent(), store.extractContent(), _exportedKey)
+        .catch(() => {});
+      renderAll();
+      showBanner('Local data migrated to your account.', 5000);
+    }
+    store.clearLegacyData();
+    banner.remove();
+    sessionStorage.setItem('lore_migration_dismissed', '1');
+  });
+
+  $('btn-mig-no')?.addEventListener('click', () => {
+    store.clearLegacyData();
+    banner.remove();
+    sessionStorage.setItem('lore_migration_dismissed', '1');
   });
 }
 
@@ -1097,6 +1120,19 @@ function _fireTelemetry() {
 async function init() {
   if (isAuthEnabled && window.location.search.includes('code=')) {
     await handleCallback().catch(console.error);
+  }
+
+  // If authenticated, try to pre-load the user's encrypted local cache from the
+  // session key so the first render shows real data without waiting for cloud.
+  if (isAuthenticated()) {
+    const userId = getUserSub();
+    const cachedKeyStr = userId && sessionStorage.getItem(`lore_key_${userId}`);
+    if (cachedKeyStr) {
+      try {
+        const key = await importKey(cachedKeyStr);
+        await store.setUser(userId, key);
+      } catch { /* will be resolved by cloud sync */ }
+    }
   }
 
   // Apply feature flags before rendering

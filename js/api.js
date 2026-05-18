@@ -83,13 +83,13 @@ export async function loadWorld() {
   const resp = await apiFetch('/world');
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();   // { data, updatedAt } or null
+  return resp.json();   // { data, content, cryptoKey, updatedAt } or null
 }
 
-export async function saveWorld(data, content = {}) {
+export async function saveWorld(data, content = {}, cryptoKey = null) {
   const resp = await apiFetch('/world', {
     method: 'PUT',
-    body:   JSON.stringify({ data, content }),
+    body:   JSON.stringify({ data, content, ...(cryptoKey ? { cryptoKey } : {}) }),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();   // { updatedAt }

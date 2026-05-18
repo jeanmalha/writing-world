@@ -1,5 +1,43 @@
-const LS_KEY   = 'writingworld_v1';
-const SNAP_KEY = 'writingworld_snapshots';
+const LEGACY_KEY = 'writingworld_v1';   // anonymous / pre-auth data
+const SNAP_KEY   = 'writingworld_snapshots';
+
+// ── Encryption state (set by setUser after auth) ──────────────────────────────
+let _userId    = null;  // Cognito sub
+let _cryptoKey = null;  // CryptoKey object (in-memory only)
+
+function _lsKey() {
+  return _userId ? `lore_data_${_userId}` : LEGACY_KEY;
+}
+
+// Async disk write — encrypts if key is set, otherwise plain JSON
+async function _writeToDisk(data) {
+  const json = JSON.stringify(data);
+  try {
+    if (_cryptoKey) {
+      const { encrypt } = await import('./crypto.js');
+      localStorage.setItem(_lsKey(), await encrypt(json, _cryptoKey));
+    } else {
+      localStorage.setItem(_lsKey(), json);
+    }
+  } catch (e) { console.error('Disk write failed', e); }
+}
+
+// Async disk read — decrypts if key is set
+async function _readFromDisk() {
+  const raw = localStorage.getItem(_lsKey());
+  if (!raw) return null;
+  try {
+    let json = raw;
+    if (_cryptoKey) {
+      const { decrypt } = await import('./crypto.js');
+      json = await decrypt(raw, _cryptoKey);
+    }
+    return JSON.parse(json);
+  } catch { return null; }
+}
+
+// Serialise async writes so they never interleave
+let _writeQueue = Promise.resolve();
 
 function loadSnaps() {
   try { return JSON.parse(localStorage.getItem(SNAP_KEY) || '[]'); }
@@ -124,27 +162,31 @@ function _migrateV1(old) {
   };
 }
 
-function load() {
+// Synchronous load of legacy anonymous data (used before auth resolves)
+function _loadLegacy() {
   try {
-    const raw = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+    const raw = JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null');
     if (!raw) return _defaultData();
     if (raw.version === 1) return _migrateV1(raw);
     if (raw.version === 2) return raw;
-    return _defaultData();
-  } catch { return _defaultData(); }
+  } catch {}
+  return _defaultData();
 }
 
 const _persistCallbacks = [];
 
 function persist(data) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(data));
-    _persistCallbacks.forEach(fn => fn());
-    return true;
-  } catch (e) { console.error('Save failed', e); return false; }
+  // Fire callbacks immediately so the UI stays reactive
+  _persistCallbacks.forEach(fn => fn());
+  // Queue the encrypted disk write
+  _writeQueue = _writeQueue
+    .then(() => _writeToDisk(data))
+    .catch(e => console.error('Persist failed', e));
+  return true;
 }
 
-let _data = load();
+// Start with legacy anonymous data; setUser() replaces this after auth
+let _data = _loadLegacy();
 
 // Active project accessor — always returns the current project's sub-object
 function _proj() {
@@ -641,7 +683,7 @@ export const store = {
   onPersist(fn) { _persistCallbacks.push(fn); },
 
   clearLocalData() {
-    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem(_lsKey());
     localStorage.removeItem(SNAP_KEY);
     _data = _defaultData();
   },
@@ -697,8 +739,43 @@ export const store = {
   loadData(data) {
     if (!data.version) throw new Error('Unrecognised format');
     _data = data.version === 2 ? data : _migrateV1(data);
-    localStorage.setItem(LS_KEY, JSON.stringify(_data));
-    // Don't fire callbacks — this is an incoming sync, not a local mutation
+    // Async encrypted write — don't fire callbacks (incoming sync, not local mutation)
+    _writeQueue = _writeQueue
+      .then(() => _writeToDisk(_data))
+      .catch(e => console.error('loadData write failed', e));
+  },
+
+  // Switch to user-namespaced encrypted storage; loads cached local data if available.
+  async setUser(userId, cryptoKey) {
+    _userId    = userId;
+    _cryptoKey = cryptoKey;
+    const cached = await _readFromDisk();
+    if (cached && (cached.version === 1 || cached.version === 2)) {
+      _data = cached.version === 2 ? cached : _migrateV1(cached);
+    }
+  },
+
+  // Returns true if there is anonymous legacy data that hasn't been claimed by a user.
+  hasLegacyData() {
+    if (!_userId) return false;
+    try {
+      const raw = JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null');
+      if (!raw || (raw.version !== 1 && raw.version !== 2)) return false;
+      const entities = raw.entities || Object.values(raw.projects || {})[0]?.entities || {};
+      return Object.keys(entities).length > 0;
+    } catch { return false; }
+  },
+
+  getLegacyData() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null');
+      if (!raw) return null;
+      return raw.version === 2 ? raw : raw.version === 1 ? _migrateV1(raw) : null;
+    } catch { return null; }
+  },
+
+  clearLegacyData() {
+    localStorage.removeItem(LEGACY_KEY);
   },
 
   dataUpdatedAt() {

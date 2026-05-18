@@ -997,7 +997,8 @@ def get_world(event):
             print(f'Content fetch failed: {e}')
 
     return out(200, {'data': json.loads(item['data']), 'content': content,
-                     'updatedAt': item['updatedAt']})
+                     'updatedAt': item['updatedAt'],
+                     'cryptoKey': item.get('cryptoKey')})
 
 def put_world(event):
     uid = _user_id(event)
@@ -1010,7 +1011,8 @@ def put_world(event):
     world_data = body.get('data')
     if not world_data:
         return out(400, {'error': 'data is required'})
-    content = body.get('content') or {}
+    content    = body.get('content') or {}
+    crypto_key = body.get('cryptoKey')
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -1033,6 +1035,8 @@ def put_world(event):
             except Exception: pass
 
     item = {'userId': uid, 'data': json.dumps(world_data), 'updatedAt': now}
+    if crypto_key:
+        item['cryptoKey'] = crypto_key
     if chunk_keys:
         item['contentChunks'] = chunk_keys
     ddb.Table(WORLD_TABLE).put_item(Item=item)
