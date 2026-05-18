@@ -54,9 +54,14 @@ Resources:
           response.headers['x-content-type-options'] = { value: 'nosniff' };
           response.headers['x-frame-options'] = { value: 'DENY' };
           response.headers['referrer-policy'] = { value: 'strict-origin-when-cross-origin' };
+          // Importmap must be inline — its SHA-256 hash is hardcoded here.
+          // Recompute if the importmap changes:
+          //   python3 -c "import re,base64,hashlib; h=open('index.html').read();
+          //     m=re.search(r'<script type=\"importmap\">(.*?)</script>',h,re.DOTALL);
+          //     print('sha256-'+base64.b64encode(hashlib.sha256(m.group(1).encode()).digest()).decode())"
           response.headers['content-security-policy'] = { value: [
             "default-src 'none'",
-            "script-src 'self' https://cdn.jsdelivr.net",
+            "script-src 'self' https://cdn.jsdelivr.net 'sha256-WTTK/ihM9ZOhV4BTR20Y9lF/iiTxPXjET71fs1GPCgQ='",
             "worker-src blob: https://cdn.jsdelivr.net",
             "connect-src 'self' https://*.auth.us-east-1.amazoncognito.com https://*.execute-api.us-east-1.amazonaws.com https://client.rum.us-east-1.amazonaws.com https://dataplane.rum.us-east-1.amazonaws.com",
             "img-src 'self' data:",
