@@ -132,7 +132,21 @@ export const AUTH_CONFIG = {
 EOF
 success "js/config.js written."
 
-# ── 7. Push updated frontend JS ────────────────────────────────────────────────
+# ── 7. Apply Cognito hosted-UI CSS theme ──────────────────────────────────────
+info "Applying Cognito hosted UI theme…"
+USER_POOL_ID=$(aws cloudformation describe-stacks \
+  --profile "$PROFILE" --region "$REGION" \
+  --stack-name "$STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+  --output text)
+aws cognito-idp set-ui-customization \
+  --profile "$PROFILE" --region "$REGION" \
+  --user-pool-id "$USER_POOL_ID" \
+  --css file://"$SCRIPT_DIR/cognito-ui.css" \
+  --no-cli-pager &>/dev/null
+success "Cognito UI theme applied."
+
+# ── 8. Push updated frontend JS ────────────────────────────────────────────────
 info "Syncing frontend…"
 bash "$SCRIPT_DIR/deploy.sh" sync
 

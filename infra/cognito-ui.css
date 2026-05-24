@@ -1,0 +1,137 @@
+/*
+ * Lore — Cognito Hosted UI dark theme
+ * Applied by deploy-backend.sh via: aws cognito-idp set-ui-customization
+ */
+
+/* ── Page ── */
+.background-customizable {
+  background-color: #0a0a0f;
+  background-image: none;
+}
+
+/* ── Card ── */
+.modal-content {
+  background-color: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+/* ── Banner (top of card) ── */
+.banner-customizable {
+  padding: 28px 32px 22px;
+  background-color: #111827;
+  border-bottom: 1px solid #1f2937;
+}
+
+/* ── App name ── */
+.signInString-customizable {
+  display: block;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 20px;
+  font-weight: bold;
+  letter-spacing: 6px;
+  color: #3b82f6;
+  padding: 0;
+}
+
+/* ── Labels ── */
+.label-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 10px;
+  font-weight: normal;
+  color: #6b7280;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── Inputs ── */
+.inputField-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 13px;
+  color: #e5e7eb;
+  background-color: #0a0a0f;
+  border: 1px solid #1f2937;
+  border-radius: 0;
+  padding: 6px 10px;
+  height: 36px;
+}
+
+.inputField-customizable:focus {
+  border-color: #3b82f6;
+  outline: none;
+  box-shadow: none;
+}
+
+/* ── Submit button ── */
+.submitButton-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  height: 38px;
+  background-color: #3b82f6;
+  color: #ffffff;
+  border: none;
+  border-radius: 0;
+  margin-top: 18px;
+}
+
+.submitButton-customizable:hover {
+  background-color: #1d4ed8;
+  color: #ffffff;
+}
+
+/* ── Links ("Forgot password?", back links) ── */
+.redirect-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+}
+
+.redirect-customizable a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+/* ── Description text ── */
+.textDescription-customizable,
+.idpDescription-customizable,
+.pageDescription-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* ── Password strength indicators ── */
+.passwordCheck-valid-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  color: #34d399;
+}
+
+.passwordCheck-notValid-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* ── Errors ── */
+.errorMessage-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  color: #fca5a5;
+  background-color: rgba(239,68,68,0.08);
+  border: 1px solid #ef4444;
+  padding: 8px 12px;
+  border-radius: 0;
+}
+
+/* ── Fine print ── */
+.legalText-customizable {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 10px;
+  color: #374151;
+}
