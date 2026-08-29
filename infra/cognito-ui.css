@@ -14,16 +14,6 @@
   border-bottom: 1px solid #1f2937;
 }
 
-.signInString-customizable {
-  display: block;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 20px;
-  font-weight: bold;
-  letter-spacing: 6px;
-  color: #3b82f6;
-  padding: 0;
-}
-
 .label-customizable {
   font-family: 'Courier New', Courier, monospace;
   font-size: 10px;
@@ -83,12 +73,6 @@
 }
 
 .idpDescription-customizable {
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.pageDescription-customizable {
   font-family: 'Courier New', Courier, monospace;
   font-size: 12px;
   color: #6b7280;

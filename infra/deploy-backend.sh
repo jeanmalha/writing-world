@@ -39,7 +39,7 @@ echo "  Bucket: $LAMBDA_BUCKET"
 # ── 2. Package Lambda with strands-agents ─────────────────────────────────────
 info "Installing Lambda dependencies…"
 PKG_DIR=$(mktemp -d)
-pip3 install \
+python3.12 -m pip install \
   --requirement "$SCRIPT_DIR/lambda/requirements.txt" \
   --target "$PKG_DIR" \
   --platform manylinux2014_x86_64 \
