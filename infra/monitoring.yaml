@@ -334,7 +334,7 @@ Resources:
       ExecutionRoleArn: !GetAtt SyntheticsRole.Arn
       StartCanaryAfterCreation: true
       Schedule:
-        Expression: rate(5 minutes)
+        Expression: rate(1 hour)
       RunConfig:
         TimeoutInSeconds: 60
         EnvironmentVariables:
@@ -365,7 +365,7 @@ Resources:
       ExecutionRoleArn: !GetAtt SyntheticsRole.Arn
       StartCanaryAfterCreation: true
       Schedule:
-        Expression: rate(5 minutes)
+        Expression: rate(1 hour)
       RunConfig:
         TimeoutInSeconds: 30
         EnvironmentVariables:
